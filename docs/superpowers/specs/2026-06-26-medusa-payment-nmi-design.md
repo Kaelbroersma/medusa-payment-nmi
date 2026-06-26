@@ -58,6 +58,15 @@ client-side, so — unlike Kadima — there is **no server token-minting round t
   single-use `payment_token`.
 - ACH: same flow with checking-account fields (`checkaccount`, `checkaba`, `checkname`).
 
+**ACH on `transact.php` (Direct Post field names, verified):**
+- `check_account` (account number), `check_aba` (routing), `check_name` (name on account).
+- `account_type`: `checking` | `savings`. `account_holder_type`: `personal` | `business`.
+- `sec_code`: `PPD` | `WEB` | `TEL` | `CCD` | `POP` | `RCK`. **Default `WEB`** — the SEC
+  code for internet-initiated consumer debits, which is what an online checkout is.
+- An ACH sale with a Collect.js token submits **only** `payment_token` (the token already
+  encloses the bank account); the storefront collects `account_type`/`account_holder_type`
+  via the ACH form and writes them to the session for the sale request.
+
 **Payment API (Direct Post):**
 - Endpoint: `https://secure.nmi.com/api/transact.php` (prod) /
   `https://sandbox.nmi.com/api/transact.php` (sandbox). POST, `application/x-www-form-urlencoded`.
@@ -201,7 +210,7 @@ interface NmiAchOptions {
   securityKey: string
   tokenizationKey: string
   webhookSecret: string
-  secCode?: "PPD" | "CCD" | "WEB" | "TEL"   // default "WEB"
+  secCode?: "PPD" | "CCD" | "WEB" | "TEL"   // → NMI `sec_code`; default "WEB" (online consumer debit)
   sandbox?: boolean
 }
 ```
