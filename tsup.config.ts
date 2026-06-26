@@ -1,6 +1,6 @@
 import { defineConfig } from "tsup"
 export default defineConfig({
-  entry: ["src/index.ts", "src/providers/nmi-card.ts", "src/providers/nmi-ach.ts"],
+  entry: ["src/index.ts", "src/providers/nmi.ts"],
   outDir: ".medusa/server/src",
   format: ["esm"],
   dts: true,

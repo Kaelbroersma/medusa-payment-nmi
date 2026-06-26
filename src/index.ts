@@ -1,9 +1,9 @@
 import { ModuleProvider, Modules } from "@medusajs/framework/utils"
-import { NmiCardProviderService } from "./providers/nmi-card"
-import { NmiAchProviderService } from "./providers/nmi-ach"
+import { NmiProviderService } from "./providers/nmi"
 
 /**
- * Registers BOTH providers under the Payment module. In medusa-config.ts:
+ * Registers the unified NMI payment provider (card + ACH + Apple/Google Pay).
+ * In medusa-config.ts:
  *
  *   modules: [
  *     {
@@ -11,22 +11,13 @@ import { NmiAchProviderService } from "./providers/nmi-ach"
  *       options: {
  *         providers: [
  *           {
- *             resolve: "medusa-payment-nmi/providers/nmi-card",
+ *             resolve: "medusa-payment-nmi/providers/nmi",
  *             options: {
  *               securityKey: process.env.NMI_SECURITY_KEY,
  *               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
  *               webhookSecret: process.env.NMI_WEBHOOK_SECRET,
- *               captureMethod: "auth",
- *               sandbox: process.env.NODE_ENV !== "production",
- *             },
- *           },
- *           {
- *             resolve: "medusa-payment-nmi/providers/nmi-ach",
- *             options: {
- *               securityKey: process.env.NMI_SECURITY_KEY,
- *               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
- *               webhookSecret: process.env.NMI_WEBHOOK_SECRET,
- *               secCode: "WEB",
+ *               captureMethod: "auth",   // card/wallet: "auth" or "sale"
+ *               secCode: "WEB",          // ACH SEC code
  *               sandbox: process.env.NODE_ENV !== "production",
  *             },
  *           },
@@ -36,7 +27,7 @@ import { NmiAchProviderService } from "./providers/nmi-ach"
  *   ]
  */
 export default ModuleProvider(Modules.PAYMENT, {
-  services: [NmiCardProviderService, NmiAchProviderService],
+  services: [NmiProviderService],
 })
 
-export { NmiCardProviderService, NmiAchProviderService }
+export { NmiProviderService }

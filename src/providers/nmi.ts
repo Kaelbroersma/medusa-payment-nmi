@@ -18,22 +18,28 @@ import {
   CreateAccountHolderInput, CreateAccountHolderOutput,
 } from "@medusajs/framework/types"
 import { NmiClient } from "../lib/nmi-client"
-import { verifySignature, extractSessionId, mapCardEvent } from "../lib/webhook"
-import { COLLECT_SCRIPT_URL, NmiCardOptions } from "../types"
+import { verifySignature, extractSessionId, mapNmiEvent } from "../lib/webhook"
+import { NmiOptions } from "../types"
 
 /**
- * NMI card provider. SYNCHRONOUS. The browser tokenizes the card via Collect.js
- * (public tokenizationKey); authorizePayment charges that single-use payment_token
- * server-side via transact.php and knows the result immediately. The webhook is a
- * reconciliation backstop.
+ * Unified NMI payment provider — card, ACH, and Apple/Google Pay through one
+ * provider, backed by NMI's Collect.js tokenization (the `NmiPayments` storefront
+ * component). The browser tokenizes the chosen method into a single-use
+ * `payment_token`; this provider charges it server-side via transact.php.
+ *
+ * The storefront stamps `payment_method` ("ach" vs "card") onto the session so we
+ * know which lifecycle to run:
+ *  - card / wallet → SYNCHRONOUS auth or sale; result known immediately.
+ *  - ach           → ASYNCHRONOUS: submit a sale (accepted → "authorized"), then
+ *                    the settlement webhook captures it and an ACH return fails it.
  */
-class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
-  static identifier = "nmi-card"
+class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
+  static identifier = "nmi"
 
   protected client: NmiClient
-  protected options_: NmiCardOptions
+  protected options_: NmiOptions
 
-  constructor(container: Record<string, unknown>, options: NmiCardOptions) {
+  constructor(container: Record<string, unknown>, options: NmiOptions) {
     super(container, options)
     this.options_ = options
     this.client = new NmiClient(options.securityKey, options.sandbox)
@@ -41,33 +47,50 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
 
   static validateOptions(options: Record<string, unknown>): void {
     for (const key of ["securityKey", "tokenizationKey", "webhookSecret"]) {
-      if (!options[key]) throw new Error(`NMI card provider: required option \`${key}\` is missing`)
+      if (!options[key]) throw new Error(`NMI provider: required option \`${key}\` is missing`)
     }
   }
 
-  /** No money moves; hand the storefront everything Collect.js needs. */
+  /** No money moves; hand the storefront the public tokenization key. */
   async initiatePayment(input: InitiatePaymentInput): Promise<InitiatePaymentOutput> {
     return {
       id: `nmi_${input.data?.session_id ?? "init"}`,
       data: {
         session_id: input.data?.session_id,
         tokenizationKey: this.options_.tokenizationKey,
-        collectScriptUrl: COLLECT_SCRIPT_URL,
         amount: input.amount,
         currency_code: input.currency_code,
       },
     }
   }
 
-  /** Charge the Collect.js payment_token. auth → /auth; sale → /sale. */
+  /** Charge the Collect.js token. ACH → async sale; card/wallet → sync auth/sale. */
   async authorizePayment(input: AuthorizePaymentInput): Promise<AuthorizePaymentOutput> {
     const paymentToken = input.data?.payment_token as string | undefined
+    const paymentMethod = (input.data?.payment_method as string | undefined) ?? "card"
     const sessionId =
       (input.data?.session_id as string) ?? (input.context?.idempotency_key as string)
     if (!paymentToken) {
-      // Storefront has not tokenized yet — keep the session pending.
       return { status: "pending", data: { ...input.data } }
     }
+
+    if (paymentMethod === "ach") {
+      const txn = await this.client.transact({
+        type: "sale",
+        amount: Number(input.data?.amount),
+        paymentToken,
+        sessionId,
+        ach: {
+          secCode: this.options_.secCode ?? "WEB",
+          accountType: input.data?.account_type as "checking" | "savings" | undefined,
+          accountHolderType: input.data?.account_holder_type as "personal" | "business" | undefined,
+        },
+      })
+      // Accepted, not yet settled — settlement webhook drives "captured".
+      return { status: "authorized", data: { payment_method: "ach", transactionid: txn.transactionid, raw: txn } }
+    }
+
+    // Card / wallet — synchronous.
     const method = this.options_.captureMethod ?? "auth"
     const txn = await this.client.transact({
       type: method === "sale" ? "sale" : "auth",
@@ -77,11 +100,13 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
     })
     return {
       status: method === "sale" ? "captured" : "authorized",
-      data: { transactionid: txn.transactionid, authcode: txn.authcode, raw: txn },
+      data: { payment_method: "card", transactionid: txn.transactionid, authcode: txn.authcode, raw: txn },
     }
   }
 
   async capturePayment(input: CapturePaymentInput): Promise<CapturePaymentOutput> {
+    // ACH settles asynchronously (settlement webhook) — capture is a no-op.
+    if (input.data?.payment_method === "ach") return { data: input.data ?? {} }
     const transactionId = String(input.data?.transactionid)
     const txn = await this.client.transact({ type: "capture", transactionId })
     return { data: { ...input.data, captured: true, raw: txn } }
@@ -104,7 +129,7 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
 
   async getPaymentStatus(input: GetPaymentStatusInput): Promise<GetPaymentStatusOutput> {
     const d = input.data ?? {}
-    if (d.refundId || d.captured) return { status: "captured", data: d }
+    if (d.settled || d.captured || d.refundId) return { status: "captured", data: d }
     if (d.transactionid) return { status: "authorized", data: d }
     return { status: "pending", data: d }
   }
@@ -121,7 +146,7 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
     return { data: input.data ?? {} }
   }
 
-  /** Vault is out of scope for v1: satisfy the account-holder step with a synthetic id. */
+  /** Vault out of scope for v1: satisfy the account-holder step with a synthetic id. */
   async createAccountHolder(input: CreateAccountHolderInput): Promise<CreateAccountHolderOutput> {
     return { id: `nmi_novault_${input.context.customer.id}`, data: { novault: true } }
   }
@@ -139,7 +164,7 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
     }
     const body = payload.data as Record<string, any>
     const eventBody = (body.event_body ?? {}) as Record<string, any>
-    const action = mapCardEvent(body.event_type as string, eventBody)
+    const action = mapNmiEvent(body.event_type as string, eventBody)
     if (!action) return { action: "not_supported" }
     return {
       action,
@@ -151,8 +176,8 @@ class NmiCardProviderService extends AbstractPaymentProvider<NmiCardOptions> {
   }
 }
 
-export { NmiCardProviderService }
+export { NmiProviderService }
 
 export default ModuleProvider(Modules.PAYMENT, {
-  services: [NmiCardProviderService],
+  services: [NmiProviderService],
 })

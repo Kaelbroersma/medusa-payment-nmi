@@ -16,15 +16,10 @@
       "import": "./.medusa/server/src/index.js",
       "default": "./.medusa/server/src/index.js"
     },
-    "./providers/nmi-card": {
-      "types": "./.medusa/server/src/providers/nmi-card.d.ts",
-      "import": "./.medusa/server/src/providers/nmi-card.js",
-      "default": "./.medusa/server/src/providers/nmi-card.js"
-    },
-    "./providers/nmi-ach": {
-      "types": "./.medusa/server/src/providers/nmi-ach.d.ts",
-      "import": "./.medusa/server/src/providers/nmi-ach.js",
-      "default": "./.medusa/server/src/providers/nmi-ach.js"
+    "./providers/nmi": {
+      "types": "./.medusa/server/src/providers/nmi.d.ts",
+      "import": "./.medusa/server/src/providers/nmi.js",
+      "default": "./.medusa/server/src/providers/nmi.js"
     }
   },
   "files": [".medusa/server", "src", "storefront", "README.md"],
