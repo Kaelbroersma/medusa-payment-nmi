@@ -1,19 +1,26 @@
 # medusa-payment-nmi
 
-A Medusa v2 payment provider for the **NMI Gateway** — card **and** ACH/eCheck, collected
-through **NMI Collect.js** hosted fields. The card PAN / bank number is tokenized in the
-browser and never touches your server (PCI SAQ-A-EP).
+A Medusa v2 payment provider for the **NMI Gateway** — **card, ACH/eCheck, and Apple/Google
+Pay through one provider**, collected with NMI's official **`<NmiPayments>`** component
+(`@nmipayments/nmi-pay-react`). The card PAN / bank number is tokenized in the browser and
+never touches your server.
 
-- **Card** authorizes **synchronously**: Collect.js tokenizes → the backend charges the
-  token via the Payment API and knows the result immediately. Webhooks are a backstop.
-- **ACH** is **asynchronous**: the backend submits the debit (`authorized`); a settlement
+You register a single **NMI** payment method; the customer picks card or bank (or a wallet)
+inside the payment element, and the provider runs the right lifecycle:
+
+- **Card / Apple Pay / Google Pay** authorize **synchronously** — the backend charges the
+  token via the Payment API and knows the result immediately.
+- **ACH** is **asynchronous** — the backend submits the debit (`authorized`); a settlement
   webhook captures it, an ACH return fails it.
 
 ## Install
 
 ```bash
-npm install medusa-payment-nmi
+npm install github:Kaelbroersma/medusa-payment-nmi
 ```
+
+The `prepare` script builds `.medusa/server` on install, so the subpath export
+`medusa-payment-nmi/providers/nmi` resolves with no extra step.
 
 ## Configure (`medusa-config.ts`)
 
@@ -25,22 +32,13 @@ module.exports = defineConfig({
       options: {
         providers: [
           {
-            resolve: "medusa-payment-nmi/providers/nmi-card",
+            resolve: "medusa-payment-nmi/providers/nmi",
             options: {
               securityKey: process.env.NMI_SECURITY_KEY,
               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
               webhookSecret: process.env.NMI_WEBHOOK_SECRET,
-              captureMethod: "auth",            // or "sale"
-              sandbox: process.env.NODE_ENV !== "production",
-            },
-          },
-          {
-            resolve: "medusa-payment-nmi/providers/nmi-ach",
-            options: {
-              securityKey: process.env.NMI_SECURITY_KEY,
-              tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
-              webhookSecret: process.env.NMI_WEBHOOK_SECRET,
-              secCode: "WEB",                   // internet-initiated consumer debit
+              captureMethod: "auth",   // card/wallet: "auth" or "sale"
+              secCode: "WEB",          // ACH SEC code (internet-initiated consumer debit)
               sandbox: process.env.NODE_ENV !== "production",
             },
           },
@@ -54,55 +52,50 @@ module.exports = defineConfig({
 | Option | Required | Notes |
 |---|---|---|
 | `securityKey` | ✅ | Private API key for `transact.php`. |
-| `tokenizationKey` | ✅ | Public Collect.js key; sent to the storefront. |
+| `tokenizationKey` | ✅ | Public key; sent to the storefront `<NmiPayments>` component. |
 | `webhookSecret` | ✅ | Webhook signing key (HMAC-SHA256). |
-| `captureMethod` (card) | — | `auth` (default) or `sale`. |
-| `secCode` (ACH) | — | `WEB` (default), `PPD`, `CCD`, `TEL`. |
+| `captureMethod` | — | Card/wallet: `auth` (default) or `sale`. |
+| `secCode` | — | ACH: `WEB` (default), `PPD`, `CCD`, `TEL`. |
 | `sandbox` | — | Use `sandbox.nmi.com`. |
 
-## Card flow
+## How a payment flows
 
-1. `initiatePayment` returns `{ tokenizationKey, collectScriptUrl, amount }`.
-2. The storefront's `NmiHostedFields` loads Collect.js, tokenizes the card → `payment_token`.
-3. Your `onToken` writes `{ payment_token }` onto the session and completes the cart.
-4. `authorizePayment` charges the token (`auth` or `sale`) and returns the result synchronously.
+1. `initiatePayment` returns `{ tokenizationKey }` to the storefront.
+2. `<NmiPayments>` tokenizes the chosen method → a single-use token; the storefront writes
+   `{ payment_token, payment_method }` onto the payment session and completes the cart.
+3. `authorizePayment` charges the token:
+   - **card/wallet** → `auth` or `sale` (per `captureMethod`) → `authorized` / `captured`.
+   - **ach** → `sale` → `authorized` (not yet settled).
+4. For ACH, the settlement webhook → `captured`; an ACH return → `failed`.
 
-## ACH flow
+## Webhooks
 
-1. `NmiAchForm` tokenizes the bank account → `payment_token` (+ account type fields).
-2. `authorizePayment` submits a `sale` → **authorized** (not yet settled).
-3. The settlement webhook → **captured**; an ACH return → **failed**.
+Medusa exposes one webhook route for the provider:
 
-## Webhooks (required for ACH, recommended for card)
+- `POST https://<your-backend>/hooks/payment/nmi`
 
-Medusa exposes one webhook route per provider:
+In **NMI Merchant Portal → Settings → Webhooks**, add that URL, paste the signing key (your
+`webhookSecret`), and subscribe to these events:
 
-- `POST https://<your-backend>/hooks/payment/nmi-card`
-- `POST https://<your-backend>/hooks/payment/nmi-ach`
+| Events |
+|---|
+| `transaction.sale.success`, `transaction.auth.success`, `transaction.capture.success`, `transaction.refund.success`, `transaction.void.success`, `transaction.sale.failure`, `settlement.batch.complete` |
 
-In **NMI Merchant Portal → Settings → Webhooks**, add an endpoint for each URL, paste the
-signing key (that is your `webhookSecret`), and subscribe to:
-
-| Endpoint | Events |
-|---|---|
-| `…/nmi-card` | `transaction.sale.success`, `transaction.auth.success`, `transaction.capture.success`, `transaction.refund.success`, `transaction.void.success` |
-| `…/nmi-ach` | `transaction.sale.success`, `transaction.sale.failure`, `settlement.batch.complete` (+ ACH return) |
-
-Each handler verifies the `Webhook-Signature` HMAC and **self-filters by rail** (the card
-handler ignores ACH events and vice-versa), so over-subscribing is harmless. NMI requires
-public HTTPS — for local dev, tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
+The handler verifies the `Webhook-Signature` HMAC and maps each event to the right action,
+disambiguating card vs ACH by the event body. NMI requires public HTTPS — for local dev,
+tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
 
 > **Note on async outcomes:** Medusa's built-in payment-webhook subscriber acts on the
-> `authorized` and `captured` outcomes. ACH **settlement** (→ captured) therefore works
-> out of the box. ACH **returns** and **voids** are detected and mapped by this provider
-> but, like all `failed`/`canceled` webhook outcomes in current Medusa core, do not
-> auto-transition the payment — handle those by adding your own subscriber on the
-> `payment.webhook_received` event if you need automated return/void reconciliation.
+> `authorized` and `captured` outcomes. ACH **settlement** (→ captured) works out of the
+> box. ACH **returns** and **voids** are detected and mapped by this provider but, like all
+> `failed`/`canceled` webhook outcomes in current Medusa core, do not auto-transition the
+> payment — add your own subscriber on the `payment.webhook_received` event if you need
+> automated return/void reconciliation.
 
 ## Storefront
 
-See [`storefront/README.md`](./storefront/README.md) for the copy-paste Collect.js
-components and checkout wiring.
+See [`storefront/README.md`](./storefront/README.md) for the copy-paste `<NmiPayments>`
+component and checkout wiring.
 
 ## Not in v1
 
