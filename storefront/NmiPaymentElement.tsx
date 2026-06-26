@@ -13,7 +13,7 @@
  * card/wallets synchronously, ACH submitted now and settled via webhook.
  *
  * The payment session's `data` (from the provider's initiatePayment) carries
- * { tokenizationKey } — the public Collect.js key the component needs.
+ * { tokenizationKey } — the public key the <NmiPayments> component needs.
  */
 import { NmiPayments } from "@nmipayments/nmi-pay-react"
 
