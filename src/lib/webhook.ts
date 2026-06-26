@@ -1,9 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto"
 
-/** Medusa payment action strings returned from getWebhookActionAndData. */
-export type CardAction = "authorized" | "captured" | "canceled"
-export type AchAction = "authorized" | "captured" | "canceled" | "failed"
-
 /** Parse `Webhook-Signature: t=<nonce>,s=<sig>`. */
 export function parseSignatureHeader(
   header: string | undefined
@@ -48,37 +44,29 @@ export function extractSessionId(eventBody: Record<string, any>): string {
   )
 }
 
-const isAch = (b: Record<string, any>) => !!b.check
-const isCard = (b: Record<string, any>) => !!b.card
+/** Medusa payment action returned from getWebhookActionAndData. */
+export type NmiAction = "authorized" | "captured" | "canceled" | "failed"
 
-/** Card webhook is a reconciliation backstop (card auth is synchronous). */
-export function mapCardEvent(
+/**
+ * Map an NMI webhook event to a Medusa action for the unified provider.
+ * Card and ACH are disambiguated by `event_body.check` (ACH) vs `event_body.card`.
+ * A card `sale.success` is a synchronous capture; an ACH `sale.success` is only
+ * an accepted submission (authorized) — settlement arrives later. ACH returns come
+ * through as `sale.failure`.
+ */
+export function mapNmiEvent(
   eventType: string,
   eventBody: Record<string, any>
-): CardAction | null {
-  if (isAch(eventBody)) return null // not our rail
+): NmiAction | null {
+  const ach = !!eventBody.check
   switch (eventType) {
     case "transaction.auth.success": return "authorized"
-    case "transaction.sale.success":
-    case "transaction.capture.success":
+    case "transaction.sale.success": return ach ? "authorized" : "captured"
+    case "transaction.capture.success": return "captured"
+    case "settlement.batch.complete": return "captured"
     case "transaction.refund.success": return "captured"
     case "transaction.void.success": return "canceled"
-    default: return null
-  }
-}
-
-/** ACH webhook is the PRIMARY capture/fail signal (settlement is async). */
-export function mapAchEvent(
-  eventType: string,
-  eventBody: Record<string, any>
-): AchAction | null {
-  if (isCard(eventBody)) return null // not our rail
-  switch (eventType) {
-    case "transaction.sale.success": return "authorized" // accepted, not yet settled
-    case "settlement.batch.complete":
-    case "transaction.refund.success": return "captured"
-    case "transaction.sale.failure": return "failed" // includes ACH returns
-    case "transaction.void.success": return "canceled"
+    case "transaction.sale.failure": return ach ? "failed" : null
     default: return null
   }
 }

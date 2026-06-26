@@ -4,8 +4,7 @@ import {
   parseSignatureHeader,
   verifySignature,
   extractSessionId,
-  mapCardEvent,
-  mapAchEvent,
+  mapNmiEvent,
 } from "./webhook"
 
 const SECRET = "whsec_test_123"
@@ -50,30 +49,21 @@ describe("session id extraction", () => {
   })
 })
 
-describe("card event mapping", () => {
-  it("maps auth/sale/capture/refund/void", () => {
-    expect(mapCardEvent("transaction.auth.success", {})).toBe("authorized")
-    expect(mapCardEvent("transaction.sale.success", {})).toBe("captured")
-    expect(mapCardEvent("transaction.capture.success", {})).toBe("captured")
-    expect(mapCardEvent("transaction.refund.success", {})).toBe("captured")
-    expect(mapCardEvent("transaction.void.success", {})).toBe("canceled")
+describe("nmi event mapping", () => {
+  it("card sale → captured; ach sale → authorized", () => {
+    expect(mapNmiEvent("transaction.sale.success", { card: {} })).toBe("captured")
+    expect(mapNmiEvent("transaction.sale.success", { check: {} })).toBe("authorized")
   })
-  it("ignores ACH (check) events and unknown types", () => {
-    expect(mapCardEvent("transaction.sale.success", { check: {} })).toBeNull()
-    expect(mapCardEvent("transaction.sale.failure", {})).toBeNull()
+  it("auth → authorized; capture/settlement/refund → captured; void → canceled", () => {
+    expect(mapNmiEvent("transaction.auth.success", {})).toBe("authorized")
+    expect(mapNmiEvent("transaction.capture.success", {})).toBe("captured")
+    expect(mapNmiEvent("settlement.batch.complete", { check: {} })).toBe("captured")
+    expect(mapNmiEvent("transaction.refund.success", {})).toBe("captured")
+    expect(mapNmiEvent("transaction.void.success", {})).toBe("canceled")
   })
-})
-
-describe("ach event mapping", () => {
-  it("maps sale (accepted) → authorized, settlement/refund → captured, failure → failed", () => {
-    expect(mapAchEvent("transaction.sale.success", {})).toBe("authorized")
-    expect(mapAchEvent("settlement.batch.complete", {})).toBe("captured")
-    expect(mapAchEvent("transaction.refund.success", {})).toBe("captured")
-    expect(mapAchEvent("transaction.sale.failure", {})).toBe("failed")
-    expect(mapAchEvent("transaction.void.success", {})).toBe("canceled")
-  })
-  it("ignores card events and unknown types", () => {
-    expect(mapAchEvent("transaction.sale.success", { card: {} })).toBeNull()
-    expect(mapAchEvent("transaction.auth.success", {})).toBeNull()
+  it("ach return (sale.failure) → failed; card sale.failure → null; unknown → null", () => {
+    expect(mapNmiEvent("transaction.sale.failure", { check: {} })).toBe("failed")
+    expect(mapNmiEvent("transaction.sale.failure", { card: {} })).toBeNull()
+    expect(mapNmiEvent("transaction.unknown.x", {})).toBeNull()
   })
 })
