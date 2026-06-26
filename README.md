@@ -26,7 +26,6 @@ module.exports = defineConfig({
         providers: [
           {
             resolve: "medusa-payment-nmi/providers/nmi-card",
-            id: "nmi-card",
             options: {
               securityKey: process.env.NMI_SECURITY_KEY,
               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
@@ -37,7 +36,6 @@ module.exports = defineConfig({
           },
           {
             resolve: "medusa-payment-nmi/providers/nmi-ach",
-            id: "nmi-ach",
             options: {
               securityKey: process.env.NMI_SECURITY_KEY,
               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
@@ -93,6 +91,13 @@ signing key (that is your `webhookSecret`), and subscribe to:
 Each handler verifies the `Webhook-Signature` HMAC and **self-filters by rail** (the card
 handler ignores ACH events and vice-versa), so over-subscribing is harmless. NMI requires
 public HTTPS — for local dev, tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
+
+> **Note on async outcomes:** Medusa's built-in payment-webhook subscriber acts on the
+> `authorized` and `captured` outcomes. ACH **settlement** (→ captured) therefore works
+> out of the box. ACH **returns** and **voids** are detected and mapped by this provider
+> but, like all `failed`/`canceled` webhook outcomes in current Medusa core, do not
+> auto-transition the payment — handle those by adding your own subscriber on the
+> `payment.webhook_received` event if you need automated return/void reconciliation.
 
 ## Storefront
 

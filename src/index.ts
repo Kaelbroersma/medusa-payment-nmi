@@ -12,7 +12,6 @@ import { NmiAchProviderService } from "./providers/nmi-ach"
  *         providers: [
  *           {
  *             resolve: "medusa-payment-nmi/providers/nmi-card",
- *             id: "nmi-card",
  *             options: {
  *               securityKey: process.env.NMI_SECURITY_KEY,
  *               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
@@ -23,7 +22,6 @@ import { NmiAchProviderService } from "./providers/nmi-ach"
  *           },
  *           {
  *             resolve: "medusa-payment-nmi/providers/nmi-ach",
- *             id: "nmi-ach",
  *             options: {
  *               securityKey: process.env.NMI_SECURITY_KEY,
  *               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,

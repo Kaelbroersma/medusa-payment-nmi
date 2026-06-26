@@ -14,7 +14,7 @@ the returned `payment_token` onto the payment session's `data` and then complete
 ```tsx
 import { sdk } from "@lib/config"
 
-async function setSessionData(cartId: string, providerId: string, data: Record<string, unknown>) {
+async function setSessionData(cart: any, providerId: string, data: Record<string, unknown>) {
   await sdk.store.payment.initiatePaymentSession(cart, { provider_id: providerId, data })
 }
 
@@ -23,21 +23,21 @@ async function completeCart(cartId: string) {
   if (res.type === "order") window.location.href = `/order/confirmed/${res.order.id}`
 }
 
-{session.provider_id === "pp_nmi-card_nmi-card" && (
+{session.provider_id === "pp_nmi-card" && (
   <NmiHostedFields
     session={session}
     onToken={async (payment_token) => {
-      await setSessionData(cart.id, session.provider_id, { payment_token })
+      await setSessionData(cart, session.provider_id, { payment_token })
       await completeCart(cart.id)
     }}
   />
 )}
 
-{session.provider_id === "pp_nmi-ach_nmi-ach" && (
+{session.provider_id === "pp_nmi-ach" && (
   <NmiAchForm
     session={session}
     onToken={async (data) => {
-      await setSessionData(cart.id, session.provider_id, data)
+      await setSessionData(cart, session.provider_id, data)
       await completeCart(cart.id)
     }}
   />

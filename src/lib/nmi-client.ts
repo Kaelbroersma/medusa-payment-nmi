@@ -67,7 +67,10 @@ export class NmiClient {
         body: params.toString(),
       })
     } catch (e) {
-      if (attempt < 2) return this.post(params, attempt + 1)
+      if (attempt < 2) {
+        await delay(2 ** attempt * 500)
+        return this.post(params, attempt + 1)
+      }
       throw new NmiError(`Network error calling NMI: ${String(e)}`, "3")
     }
     const text = await resp.text()

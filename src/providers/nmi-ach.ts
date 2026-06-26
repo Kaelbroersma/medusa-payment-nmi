@@ -47,6 +47,7 @@ class NmiAchProviderService extends AbstractPaymentProvider<NmiAchOptions> {
     return {
       id: `nmi_ach_${input.data?.session_id ?? "init"}`,
       data: {
+        session_id: input.data?.session_id,
         tokenizationKey: this.options_.tokenizationKey,
         collectScriptUrl: COLLECT_SCRIPT_URL,
         amount: input.amount,
@@ -58,7 +59,8 @@ class NmiAchProviderService extends AbstractPaymentProvider<NmiAchOptions> {
   /** Submit the debit. Accepted → "authorized" (NOT captured; settlement is async). */
   async authorizePayment(input: AuthorizePaymentInput): Promise<AuthorizePaymentOutput> {
     const paymentToken = input.data?.payment_token as string | undefined
-    const sessionId = input.data?.session_id as string
+    const sessionId =
+      (input.data?.session_id as string) ?? (input.context?.idempotency_key as string)
     if (!paymentToken) return { status: "pending", data: { ...input.data } }
     const txn = await this.client.transact({
       type: "sale",
