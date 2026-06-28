@@ -18,6 +18,7 @@ import {
   CreateAccountHolderInput, CreateAccountHolderOutput,
 } from "@medusajs/framework/types"
 import { NmiClient } from "../lib/nmi-client"
+import { toNmiBilling } from "../lib/billing"
 import { verifySignature, extractSessionId, mapNmiEvent } from "../lib/webhook"
 import { NmiOptions } from "../types"
 
@@ -70,6 +71,11 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
     const paymentMethod = (input.data?.payment_method as string | undefined) ?? "card"
     const sessionId =
       (input.data?.session_id as string) ?? (input.context?.idempotency_key as string)
+    // Cardholder billing address for AVS. Threaded onto the session `data` by the
+    // storefront (read server-side from the trusted cart), since the payment
+    // context carries no billing address at authorize time. NMI's portal-
+    // configured AVS rules act on it; a hard reject comes back as a decline.
+    const billing = toNmiBilling(input.data?.billing)
     if (!paymentToken) {
       return { status: "pending", data: { ...input.data } }
     }
@@ -80,6 +86,7 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
         amount: Number(input.data?.amount),
         paymentToken,
         sessionId,
+        billing,
         ach: {
           secCode: this.options_.secCode ?? "WEB",
           accountType: input.data?.account_type as "checking" | "savings" | undefined,
@@ -87,7 +94,16 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
         },
       })
       // Accepted, not yet settled — settlement webhook drives "captured".
-      return { status: "authorized", data: { payment_method: "ach", transactionid: txn.transactionid, raw: txn } }
+      return {
+        status: "authorized",
+        data: {
+          payment_method: "ach",
+          transactionid: txn.transactionid,
+          avs_response: txn.avsresponse,
+          cvv_response: txn.cvvresponse,
+          raw: txn,
+        },
+      }
     }
 
     // Card / wallet — synchronous.
@@ -97,10 +113,18 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
       amount: Number(input.data?.amount),
       paymentToken,
       sessionId,
+      billing,
     })
     return {
       status: method === "sale" ? "captured" : "authorized",
-      data: { payment_method: "card", transactionid: txn.transactionid, authcode: txn.authcode, raw: txn },
+      data: {
+        payment_method: "card",
+        transactionid: txn.transactionid,
+        authcode: txn.authcode,
+        avs_response: txn.avsresponse,
+        cvv_response: txn.cvvresponse,
+        raw: txn,
+      },
     }
   }
 

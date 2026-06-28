@@ -1,6 +1,27 @@
 import { TRANSACT_HOSTS } from "../types"
 import { assertApproved, isRetryableCode, NmiError, NmiTransactResult } from "./errors"
 
+/**
+ * Cardholder billing address for AVS. Sent on sale/auth so NMI's
+ * (portal-configured) AVS rules can verify it against the issuer on file.
+ * Required fields mirror NMI's AVS inputs; optional fields are only emitted
+ * when present.
+ */
+export interface NmiBilling {
+  firstName: string
+  lastName: string
+  company?: string
+  address1: string
+  address2?: string
+  city: string
+  state: string
+  zip: string
+  /** 2-char country code; normalized to upper case (e.g. "us" -> "US"). */
+  country?: string
+  email?: string
+  phone?: string
+}
+
 export interface ChargeParamsInput {
   securityKey: string
   type: "sale" | "auth" | "capture" | "refund" | "void"
@@ -13,6 +34,8 @@ export interface ChargeParamsInput {
     accountType?: "checking" | "savings"
     accountHolderType?: "personal" | "business"
   }
+  /** Cardholder billing address for AVS (sale/auth only). */
+  billing?: NmiBilling
 }
 
 /** Parse NMI's URL-encoded transact.php response into a flat object. */
@@ -39,6 +62,24 @@ export function buildChargeParams(input: ChargeParamsInput): URLSearchParams {
     if (input.ach.secCode) p.set("sec_code", input.ach.secCode)
     if (input.ach.accountType) p.set("account_type", input.ach.accountType)
     if (input.ach.accountHolderType) p.set("account_holder_type", input.ach.accountHolderType)
+  }
+  if (input.billing) {
+    const b = input.billing
+    const set = (key: string, value?: string) => {
+      const v = value?.trim()
+      if (v) p.set(key, v)
+    }
+    set("firstname", b.firstName)
+    set("lastname", b.lastName)
+    set("company", b.company)
+    set("address1", b.address1)
+    set("address2", b.address2)
+    set("city", b.city)
+    set("state", b.state)
+    set("zip", b.zip)
+    set("country", b.country?.toUpperCase())
+    set("email", b.email)
+    set("phone", b.phone)
   }
   return p
 }
