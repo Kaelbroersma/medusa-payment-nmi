@@ -1,6 +1,7 @@
 import {
   AbstractPaymentProvider,
   BigNumber,
+  MedusaError,
   ModuleProvider,
   Modules,
 } from "@medusajs/framework/utils"
@@ -16,11 +17,13 @@ import {
   RetrievePaymentInput, RetrievePaymentOutput,
   UpdatePaymentInput, UpdatePaymentOutput,
   CreateAccountHolderInput, CreateAccountHolderOutput,
+  UpdateAccountHolderInput, UpdateAccountHolderOutput,
+  DeleteAccountHolderInput, DeleteAccountHolderOutput,
 } from "@medusajs/framework/types"
-import { NmiClient } from "../lib/nmi-client"
-import { toNmiBilling } from "../lib/billing"
-import { verifySignature, extractSessionId, mapNmiEvent } from "../lib/webhook"
-import { NmiOptions } from "../types"
+import { NmiClient } from "../../lib/nmi-client"
+import { toNmiBilling } from "../../lib/billing"
+import { verifySignature, extractSessionId, mapNmiEvent } from "../../lib/webhook"
+import { NmiOptions } from "../../types"
 
 /**
  * Unified NMI payment provider — card, ACH, and Apple/Google Pay through one
@@ -48,7 +51,12 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
 
   static validateOptions(options: Record<string, unknown>): void {
     for (const key of ["securityKey", "tokenizationKey", "webhookSecret"]) {
-      if (!options[key]) throw new Error(`NMI provider: required option \`${key}\` is missing`)
+      if (!options[key]) {
+        throw new MedusaError(
+          MedusaError.Types.INVALID_DATA,
+          `NMI provider: required option \`${key}\` is missing`
+        )
+      }
     }
   }
 
@@ -173,6 +181,15 @@ class NmiProviderService extends AbstractPaymentProvider<NmiOptions> {
   /** Vault out of scope for v1: satisfy the account-holder step with a synthetic id. */
   async createAccountHolder(input: CreateAccountHolderInput): Promise<CreateAccountHolderOutput> {
     return { id: `nmi_novault_${input.context.customer.id}`, data: { novault: true } }
+  }
+
+  async updateAccountHolder(input: UpdateAccountHolderInput): Promise<UpdateAccountHolderOutput> {
+    // Nothing stored at NMI while vaulting is out of scope.
+    return { data: input.data ?? {} }
+  }
+
+  async deleteAccountHolder(_input: DeleteAccountHolderInput): Promise<DeleteAccountHolderOutput> {
+    return { data: {} }
   }
 
   async getWebhookActionAndData(

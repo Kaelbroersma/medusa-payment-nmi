@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseTransactResponse, buildChargeParams } from "./nmi-client"
+import { parseTransactResponse, buildChargeParams } from "../src/lib/nmi-client"
 
 describe("parseTransactResponse", () => {
   it("parses NMI's URL-encoded response into fields", () => {

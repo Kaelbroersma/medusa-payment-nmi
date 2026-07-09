@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { toNmiBilling } from "./billing"
+import { toNmiBilling } from "../src/lib/billing"
 
 describe("toNmiBilling", () => {
   it("maps a Medusa billing address (session data shape) to NmiBilling", () => {

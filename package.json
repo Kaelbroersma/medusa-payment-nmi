@@ -1,43 +1,64 @@
 {
   "name": "medusa-payment-nmi",
-  "version": "0.1.0",
-  "description": "Medusa v2 payment provider for the NMI Gateway — card + ACH via Collect.js hosted fields",
+  "version": "0.2.0",
+  "description": "Medusa v2 payment provider plugin for the NMI Gateway — card + ACH/eCheck + Apple/Google Pay via the NmiPayments tokenization component",
   "license": "MIT",
-  "private": false,
-  "type": "module",
   "author": "Kael Broersma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kaelbroersma/medusa-payment-nmi.git"
+  },
   "keywords": [
-    "medusa", "medusa-plugin", "medusa-v2", "payment", "payment-provider",
-    "nmi", "collect.js", "card", "ach", "echeck", "hosted-fields"
+    "medusa",
+    "medusa-plugin",
+    "medusa-v2",
+    "medusa-plugin-payment",
+    "medusa-plugin-integration",
+    "payment",
+    "payment-provider",
+    "nmi",
+    "collect.js",
+    "card",
+    "ach",
+    "echeck",
+    "hosted-fields"
+  ],
+  "files": [
+    ".medusa/server",
+    "storefront",
+    "README.md"
   ],
   "exports": {
-    ".": {
-      "types": "./.medusa/server/src/index.d.ts",
-      "import": "./.medusa/server/src/index.js",
-      "default": "./.medusa/server/src/index.js"
-    },
-    "./providers/nmi": {
-      "types": "./.medusa/server/src/providers/nmi.d.ts",
-      "import": "./.medusa/server/src/providers/nmi.js",
-      "default": "./.medusa/server/src/providers/nmi.js"
-    }
+    "./package.json": "./package.json",
+    ".": "./.medusa/server/src/providers/nmi/index.js",
+    "./providers/*": "./.medusa/server/src/providers/*/index.js",
+    "./modules/*": "./.medusa/server/src/modules/*/index.js",
+    "./.medusa/server/src/modules/*": "./.medusa/server/src/modules/*/index.js",
+    "./*": "./.medusa/server/src/*.js"
   },
-  "files": [".medusa/server", "src", "storefront", "README.md"],
   "scripts": {
-    "build": "tsup",
+    "build": "medusa plugin:build",
+    "dev": "medusa plugin:develop",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "@medusajs/framework": "^2.0.0"
+    "@medusajs/framework": ">=2.5.0 <3"
   },
   "devDependencies": {
-    "@medusajs/framework": "^2.17.1",
+    "@medusajs/admin-sdk": "2.17.1",
+    "@medusajs/cli": "2.17.1",
+    "@medusajs/framework": "2.17.1",
+    "@medusajs/medusa": "2.17.1",
+    "@swc/core": "^1.7.28",
+    "@types/node": "^20.0.0",
     "ts-node": "^10.9.2",
-    "tsup": "^8.5.1",
     "typescript": "^5.6.3",
     "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

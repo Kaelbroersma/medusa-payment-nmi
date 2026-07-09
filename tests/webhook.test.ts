@@ -5,7 +5,7 @@ import {
   verifySignature,
   extractSessionId,
   mapNmiEvent,
-} from "./webhook"
+} from "../src/lib/webhook"
 
 const SECRET = "whsec_test_123"
 const NONCE = "1700000000"

@@ -16,11 +16,20 @@ inside the payment element, and the provider runs the right lifecycle:
 ## Install
 
 ```bash
+npm install medusa-payment-nmi
+```
+
+Or straight from GitHub (the `prepare` script builds `.medusa/server` on install):
+
+```bash
 npm install github:Kaelbroersma/medusa-payment-nmi
 ```
 
-The `prepare` script builds `.medusa/server` on install, so the subpath export
-`medusa-payment-nmi/providers/nmi` resolves with no extra step.
+**Requires:** Medusa `>= 2.5`, Node `>= 20`.
+
+This package is a standard [Medusa plugin](https://docs.medusajs.com/learn/fundamentals/plugins)
+built with `medusa plugin:build`, so it follows the official exports layout —
+`medusa-payment-nmi/providers/nmi` resolves the payment module provider.
 
 ## Configure (`medusa-config.ts`)
 
@@ -97,10 +106,31 @@ tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
 See [`storefront/README.md`](./storefront/README.md) for the copy-paste `<NmiPayments>`
 component and checkout wiring.
 
+## Local development
+
+The repo uses the official Medusa plugin toolchain:
+
+```bash
+npm install          # also builds .medusa/server via prepare
+npm run dev          # medusa plugin:develop — watch + publish to the local registry
+npm test             # vitest unit tests
+```
+
+To try local changes inside a Medusa app, use the
+[local plugin workflow](https://docs.medusajs.com/learn/fundamentals/plugins/create#3-publish-plugin-locally-for-development-and-testing):
+
+```bash
+# in this repo
+npx medusa plugin:publish
+
+# in your Medusa app
+npx medusa plugin:add medusa-payment-nmi
+```
+
 ## Not in v1
 
-Saved cards / NMI Customer Vault. The account-holder step is satisfied with a synthetic
-holder; no card is stored. (Easy to add later.)
+Saved cards / NMI Customer Vault. The account-holder methods are implemented as no-ops
+around a synthetic holder; no card is stored. (Easy to add later.)
 
 ## License
 

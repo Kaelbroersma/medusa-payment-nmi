@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { NmiError, isRetryableCode, assertApproved } from "./errors"
+import { NmiError, isRetryableCode, assertApproved } from "../src/lib/errors"
 
 describe("NMI errors", () => {
   it("assertApproved passes when response === '1'", () => {
