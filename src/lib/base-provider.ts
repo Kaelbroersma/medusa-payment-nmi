@@ -24,6 +24,25 @@ import { verifySignature, extractSessionId, mapNmiEvent } from "./webhook"
 import { NmiOptions } from "../types"
 
 /**
+ * Coerce Medusa's BigNumberInput shapes (number | string | BigNumber class |
+ * raw { value, precision }) to a plain number. `Number(bigNumberObject)` is
+ * NaN, which NMI rejects as "Invalid amount" — refunds from the admin arrive
+ * as BigNumber instances, so this must handle every shape.
+ */
+export function toAmountNumber(input: unknown): number {
+  if (typeof input === "number") return input
+  if (typeof input === "string") return Number(input)
+  if (input && typeof input === "object") {
+    const o = input as { numeric?: unknown; value?: unknown }
+    if (typeof o.numeric === "number") return o.numeric
+    if (typeof o.value === "string" || typeof o.value === "number") {
+      return Number(o.value)
+    }
+  }
+  return Number(input)
+}
+
+/**
  * Shared NMI lifecycle for every provider variant (unified, card, ach, wallet).
  * The browser tokenizes the chosen method (Collect.js hosted fields or the
  * NmiPayments element) into a single-use `payment_token`; providers charge it
@@ -60,7 +79,7 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
         tokenizationKey: this.options_.tokenizationKey,
         // Lets the storefront load Collect.js from the matching gateway host.
         sandbox: !!this.options_.sandbox,
-        amount: input.amount,
+        amount: toAmountNumber(input.amount),
         currency_code: input.currency_code,
       },
     }
@@ -82,7 +101,7 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
     const method = this.options_.captureMethod ?? "auth"
     const txn = await this.client.transact({
       type: method === "sale" ? "sale" : "auth",
-      amount: Number(input.data?.amount),
+      amount: toAmountNumber(input.data?.amount),
       paymentToken,
       sessionId,
       billing,
@@ -112,7 +131,7 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
 
     const txn = await this.client.transact({
       type: "sale",
-      amount: Number(input.data?.amount),
+      amount: toAmountNumber(input.data?.amount),
       paymentToken,
       sessionId,
       billing,
@@ -148,7 +167,7 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
   async refundPayment(input: RefundPaymentInput): Promise<RefundPaymentOutput> {
     const transactionId = String(input.data?.transactionid)
     const txn = await this.client.transact({
-      type: "refund", transactionId, amount: Number(input.amount),
+      type: "refund", transactionId, amount: toAmountNumber(input.amount),
     })
     return { data: { ...input.data, refundId: txn.transactionid, raw: txn } }
   }

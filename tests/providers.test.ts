@@ -117,6 +117,32 @@ describe("nmi (unified)", () => {
   })
 })
 
+describe("amount coercion", () => {
+  it("refunds with a BigNumber-shaped amount (admin refunds)", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    // Medusa hands refund amounts as BigNumber instances; raw shape is
+    // { value, precision } and the class exposes .numeric.
+    await svc.refundPayment({
+      amount: { numeric: 25.5, value: "25.5" },
+      data: { transactionid: "tx_1" },
+    })
+    expect(transact).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "refund", amount: 25.5 })
+    )
+  })
+
+  it("authorizes with a string amount without NaN", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    await svc.authorizePayment({
+      data: { payment_token: "tok", session_id: "ps", amount: "99.95" },
+      context: {},
+    })
+    expect(transact).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 99.95 })
+    )
+  })
+})
+
 describe("shared lifecycle", () => {
   it("initiatePayment exposes tokenizationKey and sandbox flag", async () => {
     const { svc } = makeService(NmiCardProviderService, { sandbox: true })
