@@ -25,7 +25,21 @@ export type CollectJsResponse = {
 type FieldConfig = Record<string, { selector: string; title?: string; placeholder?: string }>
 
 let scriptPromise: Promise<void> | null = null
+let scriptEl: HTMLScriptElement | null = null
 let walletNoiseFiltered = false
+
+// Collect.js does not support being configure()d twice on one page — after a
+// reconfigure (e.g. switching card <-> bank), it rebuilds the iframes but the
+// validation/token events never reach the new config, leaving the form dead.
+// So on unmount we tear the script down completely; the next mount loads it
+// fresh (browser-cached) and always gets a working first configure.
+function teardownCollectJs() {
+  if (typeof window === "undefined") return
+  scriptEl?.remove()
+  scriptEl = null
+  scriptPromise = null
+  delete (window as { CollectJS?: unknown }).CollectJS
+}
 
 // Collect.js probes Apple/Google Pay support on init and logs a console.error
 // ("Could not create PaymentRequestAbstraction…") when the merchant account has
@@ -64,6 +78,7 @@ function loadCollectJs(tokenizationKey: string, sandbox?: boolean): Promise<void
       reject(new Error("Failed to load Collect.js"))
     }
     document.head.appendChild(script)
+    scriptEl = script
   })
   return scriptPromise
 }
@@ -135,6 +150,11 @@ export function useCollectJs({
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
     return () => {
       cancelled = true
+      // Full teardown so the next mount (or the other payment method's
+      // fields) gets a fresh, working configure — see teardownCollectJs.
+      teardownCollectJs()
+      setReady(false)
+      setValidity({})
     }
     // fields/customCss are static per mount by convention
     // eslint-disable-next-line react-hooks/exhaustive-deps
