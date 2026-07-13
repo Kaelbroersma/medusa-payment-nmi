@@ -59,6 +59,10 @@ export function buildChargeParams(input: ChargeParamsInput): URLSearchParams {
     p.set("merchant_defined_field_1", input.sessionId)
   }
   if (input.ach) {
+    // transact.php defaults `payment` to creditcard; without this the gateway
+    // resolves the token in the card token space and rejects ACH tokens with
+    // "Payment Token does not exist".
+    p.set("payment", "check")
     if (input.ach.secCode) p.set("sec_code", input.ach.secCode)
     if (input.ach.accountType) p.set("account_type", input.ach.accountType)
     if (input.ach.accountHolderType) p.set("account_holder_type", input.ach.accountHolderType)

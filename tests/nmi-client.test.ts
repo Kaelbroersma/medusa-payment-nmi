@@ -39,6 +39,7 @@ describe("buildChargeParams", () => {
       sessionId: "ps_2",
       ach: { secCode: "WEB", accountType: "checking", accountHolderType: "personal" },
     })
+    expect(p.get("payment")).toBe("check")
     expect(p.get("sec_code")).toBe("WEB")
     expect(p.get("account_type")).toBe("checking")
     expect(p.get("account_holder_type")).toBe("personal")
