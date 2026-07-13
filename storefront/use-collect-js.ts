@@ -25,9 +25,31 @@ export type CollectJsResponse = {
 type FieldConfig = Record<string, { selector: string; title?: string; placeholder?: string }>
 
 let scriptPromise: Promise<void> | null = null
+let walletNoiseFiltered = false
+
+// Collect.js probes Apple/Google Pay support on init and logs a console.error
+// ("Could not create PaymentRequestAbstraction…") when the merchant account has
+// no wallets provisioned — benign for a card/ACH-only integration, but dev
+// overlays (e.g. Next.js) surface any console.error as a full-screen error.
+// Drop that one message; everything else passes through untouched.
+function filterWalletProbeNoise() {
+  if (walletNoiseFiltered || typeof window === "undefined") return
+  walletNoiseFiltered = true
+  const original = console.error.bind(console)
+  console.error = (...args: unknown[]) => {
+    if (
+      typeof args[0] === "string" &&
+      args[0].includes("Could not create PaymentRequestAbstraction")
+    ) {
+      return
+    }
+    original(...args)
+  }
+}
 
 function loadCollectJs(tokenizationKey: string, sandbox?: boolean): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve()
+  filterWalletProbeNoise()
   if (window.CollectJS) return Promise.resolve()
   if (scriptPromise) return scriptPromise
   scriptPromise = new Promise((resolve, reject) => {
