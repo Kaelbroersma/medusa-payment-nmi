@@ -46,6 +46,7 @@ export const NmiAchFields = forwardRef<
       checkaba: { selector: "#nmi-checkaba", placeholder: "Routing number" },
       checkaccount: { selector: "#nmi-checkaccount", placeholder: "Account number" },
     },
+    paymentType: "ck",
     customCss,
     onToken: (response: CollectJsResponse) =>
       onToken({

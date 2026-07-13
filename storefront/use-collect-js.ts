@@ -50,13 +50,20 @@ export function useCollectJs({
   tokenizationKey,
   sandbox,
   fields,
+  paymentType,
   customCss,
   onToken,
 }: {
   tokenizationKey: string | undefined
   sandbox?: boolean
   fields: FieldConfig
-  /** Collect.js CSS objects for the inputs inside NMI's iframes. */
+  /** "cc" (card) or "ck" (check/ACH) — keeps Collect.js from probing wallet
+   *  PaymentRequest support it doesn't need ("Could not create
+   *  PaymentRequestAbstraction" console error, which can break init). */
+  paymentType: "cc" | "ck"
+  /** Collect.js CSS objects for the inputs inside NMI's iframes. NOTE: the
+   *  iframe document is white by default — on a dark site, set an explicit
+   *  background-color or light text disappears. */
   customCss?: {
     base?: Record<string, string>
     focus?: Record<string, string>
@@ -81,6 +88,9 @@ export function useCollectJs({
           variant: "inline",
           tokenizationKey,
           fields,
+          paymentType,
+          country: "US",
+          currency: "USD",
           styleSniffer: false,
           customCss: customCss?.base,
           focusCss: customCss?.focus,

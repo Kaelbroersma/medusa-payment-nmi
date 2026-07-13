@@ -41,6 +41,7 @@ export const NmiCardFields = forwardRef<
       ccexp: { selector: "#nmi-ccexp", placeholder: "MM / YY" },
       cvv: { selector: "#nmi-cvv", placeholder: "CVV" },
     },
+    paymentType: "cc",
     customCss,
     onToken: (response: CollectJsResponse) =>
       onToken({ payment_token: response.token, payment_method: "card" }),
