@@ -26,13 +26,15 @@ export const NmiAchFields = forwardRef<
     session: Session
     onToken: (data: NmiAchTokenData) => void
     customCss?: Parameters<typeof useCollectJs>[0]["customCss"]
+    /** Google Font loaded inside the iframes, e.g. "Inter:400". */
+    googleFont?: string
     className?: string
     fieldClassName?: string
     labelClassName?: string
     selectClassName?: string
   }
 >(function NmiAchFields(
-  { session, onToken, customCss, className, fieldClassName, labelClassName, selectClassName },
+  { session, onToken, customCss, googleFont, className, fieldClassName, labelClassName, selectClassName },
   ref
 ) {
   const [accountType, setAccountType] = useState<"checking" | "savings">("checking")
@@ -47,6 +49,7 @@ export const NmiAchFields = forwardRef<
       checkaccount: { selector: "#nmi-checkaccount", placeholder: "Account number" },
     },
     paymentType: "ck",
+    googleFont,
     customCss,
     onToken: (response: CollectJsResponse) =>
       onToken({

@@ -88,6 +88,7 @@ export function useCollectJs({
   sandbox,
   fields,
   paymentType,
+  googleFont,
   customCss,
   onToken,
 }: {
@@ -98,6 +99,10 @@ export function useCollectJs({
    *  PaymentRequest support it doesn't need ("Could not create
    *  PaymentRequestAbstraction" console error, which can break init). */
   paymentType: "cc" | "ck"
+  /** Google Font spec (e.g. "Inter:400") loaded INSIDE NMI's iframes so the
+   *  hosted inputs can match your site — parent fonts don't cross the frame
+   *  boundary. Reference the family in customCss.base["font-family"]. */
+  googleFont?: string
   /** Collect.js CSS objects for the inputs inside NMI's iframes. NOTE: the
    *  iframe document is white by default — on a dark site, set an explicit
    *  background-color or light text disappears. */
@@ -126,6 +131,7 @@ export function useCollectJs({
           tokenizationKey,
           fields,
           paymentType,
+          ...(googleFont ? { googleFont } : {}),
           country: "US",
           currency: "USD",
           styleSniffer: false,

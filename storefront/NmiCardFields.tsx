@@ -25,12 +25,14 @@ export const NmiCardFields = forwardRef<
     onToken: (data: { payment_token: string; payment_method: "card" }) => void
     /** Optional Collect.js CSS for the inputs inside NMI's iframes. */
     customCss?: Parameters<typeof useCollectJs>[0]["customCss"]
+    /** Google Font loaded inside the iframes, e.g. "Inter:400". */
+    googleFont?: string
     className?: string
     fieldClassName?: string
     labelClassName?: string
   }
 >(function NmiCardFields(
-  { session, onToken, customCss, className, fieldClassName, labelClassName },
+  { session, onToken, customCss, googleFont, className, fieldClassName, labelClassName },
   ref
 ) {
   const { ready, isValid, error, requestToken } = useCollectJs({
@@ -42,6 +44,7 @@ export const NmiCardFields = forwardRef<
       cvv: { selector: "#nmi-cvv", placeholder: "CVV" },
     },
     paymentType: "cc",
+    googleFont,
     customCss,
     onToken: (response: CollectJsResponse) =>
       onToken({ payment_token: response.token, payment_method: "card" }),
