@@ -1,0 +1,122 @@
+"use client"
+/**
+ * Shared Collect.js loader + configuration hook for the inline hosted-fields
+ * components (NmiCardFields / NmiAchFields). Collect.js is a single global —
+ * one payment form may be configured at a time, so mount exactly one of the
+ * field components at once (remounting on method switch reconfigures it).
+ */
+import { useCallback, useEffect, useRef, useState } from "react"
+
+declare global {
+  interface Window {
+    CollectJS?: {
+      configure: (config: Record<string, unknown>) => void
+      startPaymentRequest: () => void
+    }
+  }
+}
+
+export type CollectJsResponse = {
+  token: string
+  card?: { number?: string; type?: string }
+  check?: { name?: string; account?: string; aba?: string }
+}
+
+type FieldConfig = Record<string, { selector: string; title?: string; placeholder?: string }>
+
+let scriptPromise: Promise<void> | null = null
+
+function loadCollectJs(tokenizationKey: string, sandbox?: boolean): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve()
+  if (window.CollectJS) return Promise.resolve()
+  if (scriptPromise) return scriptPromise
+  scriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script")
+    const host = sandbox ? "https://sandbox.nmi.com" : "https://secure.nmi.com"
+    script.src = `${host}/token/Collect.js`
+    script.dataset.tokenizationKey = tokenizationKey
+    script.async = true
+    script.onload = () => resolve()
+    script.onerror = () => {
+      scriptPromise = null
+      reject(new Error("Failed to load Collect.js"))
+    }
+    document.head.appendChild(script)
+  })
+  return scriptPromise
+}
+
+export function useCollectJs({
+  tokenizationKey,
+  sandbox,
+  fields,
+  customCss,
+  onToken,
+}: {
+  tokenizationKey: string | undefined
+  sandbox?: boolean
+  fields: FieldConfig
+  /** Collect.js CSS objects for the inputs inside NMI's iframes. */
+  customCss?: {
+    base?: Record<string, string>
+    focus?: Record<string, string>
+    invalid?: Record<string, string>
+    placeholder?: Record<string, string>
+  }
+  onToken: (response: CollectJsResponse) => void
+}) {
+  const [ready, setReady] = useState(false)
+  const [validity, setValidity] = useState<Record<string, boolean>>({})
+  const [error, setError] = useState<string | null>(null)
+  const onTokenRef = useRef(onToken)
+  onTokenRef.current = onToken
+
+  useEffect(() => {
+    if (!tokenizationKey) return
+    let cancelled = false
+    loadCollectJs(tokenizationKey, sandbox)
+      .then(() => {
+        if (cancelled || !window.CollectJS) return
+        window.CollectJS.configure({
+          variant: "inline",
+          tokenizationKey,
+          fields,
+          styleSniffer: false,
+          customCss: customCss?.base,
+          focusCss: customCss?.focus,
+          invalidCss: customCss?.invalid,
+          placeholderCss: customCss?.placeholder,
+          fieldsAvailableCallback: () => setReady(true),
+          validationCallback: (field: string, valid: boolean) => {
+            setValidity((v) => ({ ...v, [field]: valid }))
+          },
+          callback: (response: CollectJsResponse) => {
+            if (!response?.token) {
+              setError("Payment could not be tokenized. Please re-check your details.")
+              return
+            }
+            setError(null)
+            onTokenRef.current(response)
+          },
+        })
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      cancelled = true
+    }
+    // fields/customCss are static per mount by convention
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenizationKey, sandbox])
+
+  const fieldNames = Object.keys(fields)
+  const isValid =
+    ready && fieldNames.every((name) => validity[name] === true)
+
+  /** Tokenize the mounted fields; the result arrives via onToken. */
+  const requestToken = useCallback(() => {
+    setError(null)
+    window.CollectJS?.startPaymentRequest()
+  }, [])
+
+  return { ready, isValid, error, requestToken }
+}

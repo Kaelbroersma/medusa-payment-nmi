@@ -31,6 +31,22 @@ This package is a standard [Medusa plugin](https://docs.medusajs.com/learn/funda
 built with `medusa plugin:build`, so it follows the official exports layout —
 `medusa-payment-nmi/providers/nmi` resolves the payment module provider.
 
+## Providers
+
+The package ships four payment providers sharing one NMI account/config. Register
+once, then enable the ones you want per region in the Medusa admin
+(Settings → Regions):
+
+| Identifier | Checkout option | Lifecycle |
+|---|---|---|
+| `nmi-card` | Credit card | synchronous `auth`/`sale` per `captureMethod` |
+| `nmi-ach` | Bank account (ACH/eCheck) | async: sale now → settlement webhook captures |
+| `nmi-wallet` | Apple Pay / Google Pay | synchronous, charges like card; needs portal wallet setup |
+| `nmi` | all of the above in one option | branches on the `payment_method` the storefront stamps |
+
+Resolving `"medusa-payment-nmi"` registers all four. To register a single
+variant, resolve its subpath, e.g. `"medusa-payment-nmi/providers/nmi-card"`.
+
 ## Configure (`medusa-config.ts`)
 
 ```ts
@@ -41,7 +57,7 @@ module.exports = defineConfig({
       options: {
         providers: [
           {
-            resolve: "medusa-payment-nmi/providers/nmi",
+            resolve: "medusa-payment-nmi",
             options: {
               securityKey: process.env.NMI_SECURITY_KEY,
               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
@@ -79,9 +95,12 @@ module.exports = defineConfig({
 
 ## Webhooks
 
-Medusa exposes one webhook route for the provider:
+Medusa exposes one webhook route per provider identifier:
 
-- `POST https://<your-backend>/hooks/payment/nmi`
+- split providers → `POST https://<your-backend>/hooks/payment/nmi-ach`
+  (ACH is the only asynchronous provider; card/wallet learn their outcome
+  synchronously, so one webhook destination covers the split setup)
+- unified provider → `POST https://<your-backend>/hooks/payment/nmi`
 
 In **NMI Merchant Portal → Settings → Webhooks**, add that URL, paste the signing key (your
 `webhookSecret`), and subscribe to these events:
@@ -103,8 +122,13 @@ tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
 
 ## Storefront
 
-See [`storefront/README.md`](./storefront/README.md) for the copy-paste `<NmiPayments>`
-component and checkout wiring.
+See [`storefront/README.md`](./storefront/README.md) for the copy-paste components:
+
+- **Split providers** — `NmiCardFields` / `NmiAchFields`: Collect.js inline hosted
+  fields (no extra npm dependency; you own the layout and styling, NMI's iframes
+  hold the sensitive inputs)
+- **Unified provider** — `NmiPaymentElement`: the all-in-one `<NmiPayments>` widget
+  (`@nmipayments/nmi-pay-react`)
 
 ## Local development
 
