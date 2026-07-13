@@ -166,10 +166,31 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
 
   async refundPayment(input: RefundPaymentInput): Promise<RefundPaymentOutput> {
     const transactionId = String(input.data?.transactionid)
-    const txn = await this.client.transact({
-      type: "refund", transactionId, amount: toAmountNumber(input.amount),
-    })
-    return { data: { ...input.data, refundId: txn.transactionid, raw: txn } }
+    const amount = toAmountNumber(input.amount)
+    try {
+      const txn = await this.client.transact({
+        type: "refund", transactionId, amount,
+      })
+      return { data: { ...input.data, refundId: txn.transactionid, raw: txn } }
+    } catch (refundError) {
+      // NMI can only refund SETTLED transactions; same-day (and unsettled ACH)
+      // reversals must be voids. For a full-amount refund, fall back to a void
+      // so the admin's Refund button works before the settlement batch runs.
+      // Partial refunds can't void (all-or-nothing), so those surface the
+      // original error.
+      const original = toAmountNumber(input.data?.amount)
+      const isFullRefund =
+        Number.isFinite(original) && Math.abs(amount - original) < 0.005
+      if (!isFullRefund) throw refundError
+      try {
+        const txn = await this.client.transact({ type: "void", transactionId })
+        return {
+          data: { ...input.data, refundId: txn.transactionid, voided: true, raw: txn },
+        }
+      } catch {
+        throw refundError
+      }
+    }
   }
 
   async cancelPayment(input: CancelPaymentInput): Promise<CancelPaymentOutput> {

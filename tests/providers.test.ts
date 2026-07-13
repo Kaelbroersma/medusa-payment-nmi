@@ -117,6 +117,42 @@ describe("nmi (unified)", () => {
   })
 })
 
+describe("refund settlement fallback", () => {
+  it("voids when a full-amount refund is rejected (unsettled transaction)", async () => {
+    const { svc } = makeService(NmiCardProviderService)
+    const calls: any[] = []
+    ;(svc as any).client = {
+      transact: vi.fn(async (args: any) => {
+        calls.push(args)
+        if (args.type === "refund") {
+          throw new Error("NMI transaction error: Transaction not settled")
+        }
+        return { response: "1", transactionid: "void_1" }
+      }),
+    }
+    const res = await svc.refundPayment({
+      amount: 100,
+      data: { transactionid: "tx_1", amount: 100 },
+    })
+    expect(calls.map((c: any) => c.type)).toEqual(["refund", "void"])
+    expect(res.data.voided).toBe(true)
+  })
+
+  it("does NOT void on a partial refund failure", async () => {
+    const { svc } = makeService(NmiCardProviderService)
+    ;(svc as any).client = {
+      transact: vi.fn(async (args: any) => {
+        if (args.type === "refund") throw new Error("not settled")
+        return { response: "1", transactionid: "void_1" }
+      }),
+    }
+    await expect(
+      svc.refundPayment({ amount: 25, data: { transactionid: "tx_1", amount: 100 } })
+    ).rejects.toThrow("not settled")
+    expect((svc as any).client.transact).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("amount coercion", () => {
   it("refunds with a BigNumber-shaped amount (admin refunds)", async () => {
     const { svc, transact } = makeService(NmiCardProviderService)
