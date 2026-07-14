@@ -114,6 +114,11 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
         authcode: txn.authcode,
         avs_response: txn.avsresponse,
         cvv_response: txn.cvvresponse,
+        // Display metadata from tokenization (never the real number) — passed
+        // through so receipts/admin can show "Visa •••• 1111".
+        card_type: input.data?.card_type,
+        card_last4: input.data?.card_last4,
+        card_exp: input.data?.card_exp,
         raw: txn,
       },
     }
