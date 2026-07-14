@@ -120,23 +120,6 @@ tunnel (e.g. `cloudflared`, `ngrok`) to your backend.
 > payment — add your own subscriber on the `payment.webhook_received` event if you need
 > automated return/void reconciliation.
 
-## Admin widget
-
-The plugin ships an order-details widget that shows how each NMI payment was
-made ("Visa •••• 5545", expiry, ACH descriptor) from the display metadata the
-provider records at authorization. To load it, also register the package in
-the `plugins` array (this is what makes Medusa pick up a package's admin
-extensions; the payment provider registration above stays as-is):
-
-```ts
-plugins: [
-  { resolve: "medusa-payment-nmi", options: {} },
-],
-```
-
-The widget renders under Orders → order details, below the Payments section,
-and only on orders paid through an NMI provider.
-
 ## Storefront
 
 See [`storefront/README.md`](./storefront/README.md) for the copy-paste components:
