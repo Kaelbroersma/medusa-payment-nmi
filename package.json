@@ -1,6 +1,6 @@
 {
   "name": "medusa-payment-nmi",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Medusa v2 payment provider plugin for the NMI Gateway — card + ACH/eCheck + Apple/Google Pay via the NmiPayments tokenization component",
   "license": "MIT",
   "author": "Kael Broersma",

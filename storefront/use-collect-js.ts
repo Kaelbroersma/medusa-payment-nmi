@@ -47,6 +47,11 @@ function teardownCollectJs() {
 // overlays (e.g. Next.js) surface any console.error as a full-screen error.
 // Drop that one message; everything else passes through untouched.
 function filterWalletProbeNoise() {
+  // DEV ONLY: in production nothing global is patched — the payment page runs
+  // the gateway script exactly as shipped (PCI script-attack posture).
+  if (typeof process !== "undefined" && process.env?.NODE_ENV === "production") {
+    return
+  }
   if (walletNoiseFiltered || typeof window === "undefined") return
   walletNoiseFiltered = true
   const original = console.error.bind(console)
