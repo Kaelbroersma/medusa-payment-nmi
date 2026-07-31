@@ -1,17 +1,29 @@
-# Storefront integration (Medusa v2 / Next.js)
+# Storefront components
 
-Copy-paste components for your checkout payment step. Two integration styles:
+Copy these files into your Medusa v2 storefront. They are written for the Next.js App
+Router, though nothing in them is framework specific beyond the `"use client"` directive.
+Treat them as templates rather than a published package and edit them freely once they are
+in your project.
 
-## Split providers (`nmi-card` / `nmi-ach`) — Collect.js inline hosted fields
+The concepts behind them, including the session data contract, AVS, and the webhook setup,
+live in the [root README](../README.md). This file is the component reference.
 
-You render labels and layout; NMI injects an iframe per sensitive input. No npm
-dependency beyond React.
+| File | Use with | Purpose |
+|---|---|---|
+| `use-collect-js.ts` | `nmi-card`, `nmi-ach` | Loads Collect.js and configures the inline hosted fields. |
+| `NmiCardFields.tsx` | `nmi-card` | Card number, expiry, CVV. |
+| `NmiAchFields.tsx` | `nmi-ach` | Name on account, routing, account number, plus account and holder type selects. |
+| `NmiPaymentElement.tsx` | `nmi` | Wraps NMI's `<NmiPayments>` element: card, ACH, and wallets in one component. |
 
-- `use-collect-js.ts` — script loader + `CollectJS.configure` hook (mount ONE
-  fields component at a time; remounting reconfigures)
-- `NmiCardFields.tsx` — card number / expiry / CVV
-- `NmiAchFields.tsx` — account name / routing / account + checking-savings and
-  personal-business selects
+Mount exactly one of `NmiCardFields` and `NmiAchFields` at a time. Collect.js is a single
+page-level global that cannot be configured twice, so let React unmount one before the
+other appears. Hiding a mounted form with CSS will break tokenization.
+
+## NmiCardFields and NmiAchFields
+
+Both components render your labels and layout around empty `div`s that NMI fills with an
+iframe per sensitive input. Neither renders a submit button. Tokenization is driven from
+your existing Place Order button through the forwarded ref.
 
 ```tsx
 const fieldsRef = useRef<NmiFieldsHandle>(null)
@@ -23,86 +35,134 @@ const fieldsRef = useRef<NmiFieldsHandle>(null)
     onToken={async (data) => {
       await sdk.store.payment.initiatePaymentSession(cart, {
         provider_id: "pp_nmi-card",
-        data, // { payment_token, payment_method }
+        data, // { payment_token, payment_method: "card" }
       })
       await completeCart(cart.id)
     }}
   />
 )}
 
-// Place Order button:
-<button disabled={!fieldsRef.current?.isValid}
-        onClick={() => fieldsRef.current?.requestToken()}>
+<button
+  disabled={!fieldsRef.current?.isValid}
+  onClick={() => fieldsRef.current?.requestToken()}
+>
   Place order
 </button>
 ```
 
-`NmiAchFields` works identically; its `onToken` payload adds `account_type` and
-`account_holder_type`. The session `data` from `initiatePayment` carries
-`{ tokenizationKey, sandbox }`, which the components use to load Collect.js from
-the right gateway host.
+### Props
 
-## Unified provider (`nmi`) — one element for everything
+| Prop | Type | Notes |
+|---|---|---|
+| `session` | payment session | Read for `data.tokenizationKey` and `data.sandbox`. Renders a placeholder message until the key is there. |
+| `onToken` | `(data) => void` | Fires once tokenization succeeds. Write `data` onto the session, then complete the cart. |
+| `customCss` | `{ base?, focus?, invalid?, placeholder? }` | CSS applied inside NMI's iframes. Your own stylesheet cannot reach in. |
+| `googleFont` | `string` | Font spec such as `"Inter:400"`, loaded inside the iframes. |
+| `className`, `fieldClassName`, `labelClassName` | `string` | Applied to your wrapper, the field boxes, and the labels. |
+| `selectClassName` | `string` | `NmiAchFields` only. Applied to the two selects. |
 
-Card, ACH, and Apple/Google Pay in a single element, built on NMI's official
-React component:
+### Ref handle
 
-- `NmiPaymentElement.tsx` — wraps `<NmiPayments>` from `@nmipayments/nmi-pay-react`.
+| Member | Type | Notes |
+|---|---|---|
+| `requestToken()` | `() => void` | Starts tokenization. The result arrives through `onToken`. |
+| `isValid` | `boolean` | True once every field reports valid and the iframes are installed. |
 
-The card PAN / bank number is tokenized inside NMI's secure fields and never touches your
-storefront or backend. On a completed payment, the component yields a single-use token;
-the wrapper derives the method (ACH vs card/wallet) and hands you both so you can write
-them onto the Medusa payment session and complete the cart.
+### onToken payload
 
-## Install
+`NmiCardFields`:
+
+```ts
+{ payment_token: string, payment_method: "card" }
+```
+
+`NmiAchFields`:
+
+```ts
+{
+  payment_token: string,
+  payment_method: "ach",
+  account_type: "checking" | "savings",
+  account_holder_type: "personal" | "business",
+}
+```
+
+### Styling notes
+
+The iframe document defaults to a white background and does not inherit your fonts. On a
+dark checkout, set both `color` and `background-color` in `customCss.base` or the typed
+text will look invisible. To match your site's typeface, pass `googleFont` and reference
+the family in `customCss.base["font-family"]`.
+
+```tsx
+customCss={{
+  base: {
+    "font-family": "Inter, sans-serif",
+    "font-size": "15px",
+    color: "#e5e5e5",
+    "background-color": "#171717",
+  },
+  focus: { color: "#ffffff" },
+  invalid: { color: "#dc2626" },
+  placeholder: { color: "#737373" },
+}}
+```
+
+The hook configures Collect.js with `country: "US"` and `currency: "USD"`. Change those two
+lines in `use-collect-js.ts` if you sell elsewhere.
+
+## NmiPaymentElement
+
+One element covering card, ACH, Apple Pay, and Google Pay, built on NMI's official React
+package. It renders its own method picker and pay button, so there is no ref and no
+external submit trigger.
 
 ```bash
 npm install @nmipayments/nmi-pay-react
 ```
 
-## Wiring
-
 ```tsx
 import { sdk } from "@lib/config"
 import NmiPaymentElement from "./NmiPaymentElement"
-
-async function setSessionData(cart: any, providerId: string, data: Record<string, unknown>) {
-  await sdk.store.payment.initiatePaymentSession(cart, { provider_id: providerId, data })
-}
-
-async function completeCart(cartId: string) {
-  const res = await sdk.store.cart.complete(cartId)
-  if (res.type === "order") window.location.href = `/order/confirmed/${res.order.id}`
-}
 
 {session.provider_id === "pp_nmi" && (
   <NmiPaymentElement
     session={session}
     onToken={async (data) => {
-      await setSessionData(cart, session.provider_id, data)
-      await completeCart(cart.id)
+      await sdk.store.payment.initiatePaymentSession(cart, {
+        provider_id: session.provider_id,
+        data, // { payment_token, payment_method }
+      })
+      const res = await sdk.store.cart.complete(cart.id)
+      if (res.type === "order") {
+        window.location.href = `/order/confirmed/${res.order.id}`
+      }
     }}
+    onError={(e) => console.error(e)}
   />
 )}
 ```
 
-> Provider id follows Medusa's `pp_<provider>` scheme → `pp_nmi`. Confirm yours from
-> `GET /store/payment-providers`.
+| Prop | Type | Notes |
+|---|---|---|
+| `session` | payment session | Read for `data.tokenizationKey`. |
+| `onToken` | `(data) => void \| Promise<void>` | Receives `{ payment_token, payment_method }`. Card and both wallets report as `"card"`. |
+| `onError` | `(e: unknown) => void` | Optional. Catches anything thrown inside `onToken`. |
 
-## Card vs ACH
+Field styling comes from the `appearance` prop on `<NmiPayments>` rather than from
+Collect.js CSS objects. Apple Pay and Google Pay have to be enabled in the NMI Merchant
+Portal first, and Apple Pay also needs domain registration there.
 
-The single `nmi` backend provider runs the right lifecycle from the `payment_method`
-the wrapper writes onto the session:
+## Provider ids
 
-- **card / Apple Pay / Google Pay** → authorized (or captured) synchronously.
-- **ACH** → submitted now as *authorized*; the settlement webhook captures it, an ACH
-  return fails it.
+Medusa stores providers as `pp_<identifier>`, giving `pp_nmi`, `pp_nmi-card`,
+`pp_nmi-ach`, and `pp_nmi-wallet`. Adding an `id` to the provider config appends it. Check
+`GET /store/payment-providers` for what your store actually exposes.
 
-## Minimal styles
+## Minimal error style
+
+The components render errors into `.nmi-pay-error`:
 
 ```css
-.nmi-pay-error { color:#dc2626; font-size:13px; }
+.nmi-pay-error { color: #dc2626; font-size: 13px; }
 ```
-
-The `<NmiPayments>` component ships its own field styling; pass an `appearance` prop to
-customize it (see NMI's component docs).
