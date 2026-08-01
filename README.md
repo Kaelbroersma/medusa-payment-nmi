@@ -1,5 +1,10 @@
 # medusa-payment-nmi
 
+[![npm version](https://img.shields.io/npm/v/medusa-payment-nmi.svg)](https://www.npmjs.com/package/medusa-payment-nmi)
+[![npm downloads](https://img.shields.io/npm/dt/medusa-payment-nmi.svg)](https://www.npmjs.com/package/medusa-payment-nmi)
+[![license](https://img.shields.io/npm/l/medusa-payment-nmi.svg)](./LICENSE)
+[![Medusa](https://img.shields.io/badge/Medusa-%E2%89%A5%202.5-7C3AED.svg)](https://docs.medusajs.com/)
+
 A payment provider for Medusa v2 that runs card, ACH/eCheck, Apple Pay, and Google Pay
 through an [NMI](https://www.nmi.com/) merchant account.
 
