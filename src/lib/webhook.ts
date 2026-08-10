@@ -77,12 +77,14 @@ export function classifyAchEvent(eventType: string): AchState | null {
  * an accepted submission (authorized) — the ACH network settles days later and
  * reports the outcome through the `transaction.check.status.*` family.
  *
- * `settlement.batch.complete` stays mapped. NMI's published sample for it shows only
- * batch totals with no `order_id`, but samples are abridged and real payloads have been
- * observed to carry one. Keeping it is free: Medusa's payment webhook subscriber drops
- * any event whose `session_id` is empty before acting on it, so a batch event without an
- * order id is a no-op either way.
- * See https://docs.nmi.com/reference/check-status
+ * `settlement.batch.complete` stays mapped but is inert in practice. Its documented body
+ * is card-only (`processor.type: "cc"`, a `by_card_type` breakdown) and carries batch
+ * totals with no `order_id` at any level, so `extractSessionId` finds nothing and Medusa's
+ * webhook subscriber drops the event before the payment workflow runs. It is kept as a
+ * harmless no-op rather than removed, so that an account which does somehow deliver it
+ * with an order id still resolves. Nothing about ACH should depend on it.
+ * See https://docs.nmi.com/reference/settlement-events
+ * and https://docs.nmi.com/reference/check-status
  */
 export function mapNmiEvent(
   eventType: string,
