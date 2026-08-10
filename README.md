@@ -546,8 +546,16 @@ key you configured as `webhookSecret`, and subscribe to:
 transaction.sale.success      transaction.sale.failure
 transaction.auth.success      transaction.capture.success
 transaction.refund.success    transaction.void.success
-settlement.batch.complete
+
+transaction.check.status.settle       (ACH only)
+transaction.check.status.return       (ACH only)
+transaction.check.status.latereturn   (ACH only)
 ```
+
+The three `check.status` events are what finish an ACH payment. Do not subscribe to
+`settlement.batch.complete` expecting it to do that job: its payload carries batch totals
+and a `transaction_ids` array, with no `order_id` and no merchant defined fields, so there
+is nothing in it to match back to a payment session. The provider ignores it.
 
 ### How events are interpreted
 
@@ -559,10 +567,13 @@ at `event_body.check` to tell them apart.
 | `transaction.auth.success` | authorized | authorized |
 | `transaction.sale.success` | captured | authorized (accepted, not settled) |
 | `transaction.capture.success` | captured | captured |
-| `settlement.batch.complete` | captured | captured |
 | `transaction.refund.success` | captured | captured |
 | `transaction.void.success` | canceled | canceled |
-| `transaction.sale.failure` | ignored | failed (this is how a return arrives) |
+| `transaction.sale.failure` | ignored | failed (rejected at submission) |
+| `transaction.check.status.settle` | — | captured |
+| `transaction.check.status.return` | — | failed |
+| `transaction.check.status.latereturn` | — | failed |
+| `settlement.batch.complete` | ignored | ignored |
 
 Every request is verified before any of that happens. NMI signs with a
 `Webhook-Signature: t=<nonce>,s=<signature>` header, and the handler recomputes
@@ -612,8 +623,10 @@ amounts for forcing declines in its
 change occasionally, so read them from NMI rather than copying them out of a blog post.
 
 For ACH specifically, a sandbox settlement will not arrive on its own schedule the way it
-does in production. Test the settlement path by replaying a `settlement.batch.complete`
-event at your webhook endpoint with a valid signature.
+does in production. Test the settlement path by replaying a
+`transaction.check.status.settle` event at your webhook endpoint with a valid signature and
+the `order_id` set to the payment session id. Replay a `transaction.check.status.return` to
+exercise the return path.
 
 ## Troubleshooting
 
@@ -626,7 +639,7 @@ event at your webhook endpoint with a valid signature.
 | Typed text invisible inside the fields | The iframe document's own background is white. | Set `background-color` and `color` in `customCss.base`. |
 | Your font does not apply to the inputs | Fonts do not cross the iframe boundary. | Pass `googleFont` and reference the family in `customCss.base`. |
 | Webhook returns 200 but nothing happens | Signature verification failed, which returns `not_supported`. | Confirm `webhookSecret` matches the portal, and that no proxy is rewriting the raw body. |
-| ACH payments stay `authorized` forever | No settlement webhook. | Subscribe to `settlement.batch.complete` and point it at `/hooks/payment/nmi-ach`. |
+| ACH payments stay `authorized` forever | No settlement webhook, or only `settlement.batch.complete` is subscribed — that event has no `order_id`, so it cannot resolve a session. | Subscribe to `transaction.check.status.settle` and point it at `/hooks/payment/nmi-ach`. |
 | `authorizePayment` returns `pending` | No `payment_token` on the session. | The storefront never wrote the token back, or wrote it to a different provider's session. |
 
 ## Not supported yet

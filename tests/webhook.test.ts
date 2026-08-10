@@ -54,14 +54,21 @@ describe("nmi event mapping", () => {
     expect(mapNmiEvent("transaction.sale.success", { card: {} })).toBe("captured")
     expect(mapNmiEvent("transaction.sale.success", { check: {} })).toBe("authorized")
   })
-  it("auth → authorized; capture/settlement/refund → captured; void → canceled", () => {
+  it("auth → authorized; capture/refund → captured; void → canceled", () => {
     expect(mapNmiEvent("transaction.auth.success", {})).toBe("authorized")
     expect(mapNmiEvent("transaction.capture.success", {})).toBe("captured")
-    expect(mapNmiEvent("settlement.batch.complete", { check: {} })).toBe("captured")
     expect(mapNmiEvent("transaction.refund.success", {})).toBe("captured")
     expect(mapNmiEvent("transaction.void.success", {})).toBe("canceled")
   })
-  it("ach return (sale.failure) → failed; card sale.failure → null; unknown → null", () => {
+  it("ach settlement → captured; ach return and late return → failed", () => {
+    expect(mapNmiEvent("transaction.check.status.settle", { check: {} })).toBe("captured")
+    expect(mapNmiEvent("transaction.check.status.return", { check: {} })).toBe("failed")
+    expect(mapNmiEvent("transaction.check.status.latereturn", { check: {} })).toBe("failed")
+  })
+  it("ignores settlement.batch.complete — no order_id to resolve a session from", () => {
+    expect(mapNmiEvent("settlement.batch.complete", { batch_id: "1", transaction_ids: ["9"] })).toBeNull()
+  })
+  it("ach submission rejection (sale.failure) → failed; card sale.failure → null; unknown → null", () => {
     expect(mapNmiEvent("transaction.sale.failure", { check: {} })).toBe("failed")
     expect(mapNmiEvent("transaction.sale.failure", { card: {} })).toBeNull()
     expect(mapNmiEvent("transaction.unknown.x", {})).toBeNull()

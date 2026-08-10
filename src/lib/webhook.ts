@@ -51,8 +51,13 @@ export type NmiAction = "authorized" | "captured" | "canceled" | "failed"
  * Map an NMI webhook event to a Medusa action for the unified provider.
  * Card and ACH are disambiguated by `event_body.check` (ACH) vs `event_body.card`.
  * A card `sale.success` is a synchronous capture; an ACH `sale.success` is only
- * an accepted submission (authorized) — settlement arrives later. ACH returns come
- * through as `sale.failure`.
+ * an accepted submission (authorized) — the ACH network settles days later and
+ * reports the outcome through the `transaction.check.status.*` family.
+ *
+ * `settlement.batch.complete` is deliberately unmapped: its `event_body` carries
+ * only batch totals (`batch_id`, `count`, `transaction_ids`) with no `order_id` or
+ * merchant defined fields, so there is nothing to resolve a payment session from.
+ * See https://docs.nmi.com/reference/check-status
  */
 export function mapNmiEvent(
   eventType: string,
@@ -63,10 +68,13 @@ export function mapNmiEvent(
     case "transaction.auth.success": return "authorized"
     case "transaction.sale.success": return ach ? "authorized" : "captured"
     case "transaction.capture.success": return "captured"
-    case "settlement.batch.complete": return "captured"
     case "transaction.refund.success": return "captured"
     case "transaction.void.success": return "canceled"
     case "transaction.sale.failure": return ach ? "failed" : null
+    // ACH settlement outcomes, days after the debit was accepted.
+    case "transaction.check.status.settle": return "captured"
+    case "transaction.check.status.return": return "failed"
+    case "transaction.check.status.latereturn": return "failed"
     default: return null
   }
 }
