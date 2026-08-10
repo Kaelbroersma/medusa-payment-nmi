@@ -547,15 +547,19 @@ transaction.sale.success      transaction.sale.failure
 transaction.auth.success      transaction.capture.success
 transaction.refund.success    transaction.void.success
 
+settlement.batch.complete
+
 transaction.check.status.settle       (ACH only)
 transaction.check.status.return       (ACH only)
 transaction.check.status.latereturn   (ACH only)
 ```
 
-The three `check.status` events are what finish an ACH payment. Do not subscribe to
-`settlement.batch.complete` expecting it to do that job: its payload carries batch totals
-and a `transaction_ids` array, with no `order_id` and no merchant defined fields, so there
-is nothing in it to match back to a payment session. The provider ignores it.
+The three `check.status` events are the documented way an ACH payment finishes, and they
+are the ones to rely on: they carry `order_id` and merchant defined fields, so they always
+match back to a payment session. `settlement.batch.complete` is still handled, since some
+accounts do receive it with an order id attached even though NMI's published sample omits
+one. Subscribing to both is safe — Medusa ignores any event it cannot tie to a session, so
+a batch event without an order id simply does nothing.
 
 ### How events are interpreted
 
@@ -573,7 +577,7 @@ at `event_body.check` to tell them apart.
 | `transaction.check.status.settle` | — | captured |
 | `transaction.check.status.return` | — | failed |
 | `transaction.check.status.latereturn` | — | failed |
-| `settlement.batch.complete` | ignored | ignored |
+| `settlement.batch.complete` | captured | captured |
 
 Every request is verified before any of that happens. NMI signs with a
 `Webhook-Signature: t=<nonce>,s=<signature>` header, and the handler recomputes
@@ -639,7 +643,7 @@ exercise the return path.
 | Typed text invisible inside the fields | The iframe document's own background is white. | Set `background-color` and `color` in `customCss.base`. |
 | Your font does not apply to the inputs | Fonts do not cross the iframe boundary. | Pass `googleFont` and reference the family in `customCss.base`. |
 | Webhook returns 200 but nothing happens | Signature verification failed, which returns `not_supported`. | Confirm `webhookSecret` matches the portal, and that no proxy is rewriting the raw body. |
-| ACH payments stay `authorized` forever | No settlement webhook, or only `settlement.batch.complete` is subscribed — that event has no `order_id`, so it cannot resolve a session. | Subscribe to `transaction.check.status.settle` and point it at `/hooks/payment/nmi-ach`. |
+| ACH payments stay `authorized` forever | No settlement webhook reaching the route, or the event arriving carries no `order_id` — Medusa ignores any event it cannot tie to a session. | Subscribe to `transaction.check.status.settle` and point it at `/hooks/payment/nmi-ach`. |
 | `authorizePayment` returns `pending` | No `payment_token` on the session. | The storefront never wrote the token back, or wrote it to a different provider's session. |
 
 ## Not supported yet

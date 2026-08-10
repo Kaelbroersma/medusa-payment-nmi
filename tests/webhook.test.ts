@@ -65,8 +65,8 @@ describe("nmi event mapping", () => {
     expect(mapNmiEvent("transaction.check.status.return", { check: {} })).toBe("failed")
     expect(mapNmiEvent("transaction.check.status.latereturn", { check: {} })).toBe("failed")
   })
-  it("ignores settlement.batch.complete — no order_id to resolve a session from", () => {
-    expect(mapNmiEvent("settlement.batch.complete", { batch_id: "1", transaction_ids: ["9"] })).toBeNull()
+  it("still maps settlement.batch.complete → captured (core drops it if it has no order_id)", () => {
+    expect(mapNmiEvent("settlement.batch.complete", { check: {} })).toBe("captured")
   })
   it("ach submission rejection (sale.failure) → failed; card sale.failure → null; unknown → null", () => {
     expect(mapNmiEvent("transaction.sale.failure", { check: {} })).toBe("failed")

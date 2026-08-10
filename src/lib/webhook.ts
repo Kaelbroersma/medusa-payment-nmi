@@ -54,9 +54,11 @@ export type NmiAction = "authorized" | "captured" | "canceled" | "failed"
  * an accepted submission (authorized) — the ACH network settles days later and
  * reports the outcome through the `transaction.check.status.*` family.
  *
- * `settlement.batch.complete` is deliberately unmapped: its `event_body` carries
- * only batch totals (`batch_id`, `count`, `transaction_ids`) with no `order_id` or
- * merchant defined fields, so there is nothing to resolve a payment session from.
+ * `settlement.batch.complete` stays mapped. NMI's published sample for it shows only
+ * batch totals with no `order_id`, but samples are abridged and real payloads have been
+ * observed to carry one. Keeping it is free: Medusa's payment webhook subscriber drops
+ * any event whose `session_id` is empty before acting on it, so a batch event without an
+ * order id is a no-op either way.
  * See https://docs.nmi.com/reference/check-status
  */
 export function mapNmiEvent(
@@ -68,6 +70,7 @@ export function mapNmiEvent(
     case "transaction.auth.success": return "authorized"
     case "transaction.sale.success": return ach ? "authorized" : "captured"
     case "transaction.capture.success": return "captured"
+    case "settlement.batch.complete": return "captured"
     case "transaction.refund.success": return "captured"
     case "transaction.void.success": return "canceled"
     case "transaction.sale.failure": return ach ? "failed" : null
