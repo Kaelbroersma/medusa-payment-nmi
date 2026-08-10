@@ -48,6 +48,29 @@ export function extractSessionId(eventBody: Record<string, any>): string {
 export type NmiAction = "authorized" | "captured" | "canceled" | "failed"
 
 /**
+ * The real ACH lifecycle, which Medusa's card-shaped payment status cannot express.
+ * `settled` is not final: an unauthorized return can arrive up to 60 days later, and a
+ * late return after that. Medusa records `settled` as `captured` and has no state at all
+ * for the returns, so anything that depends on an ACH debit actually sticking has to read
+ * this rather than the payment status.
+ */
+export type AchState = "settled" | "returned" | "late_returned"
+
+/**
+ * Classify an NMI event as an ACH lifecycle transition, or null if it is not one.
+ * Exported so a `payment.webhook_received` subscriber can react to returns, which
+ * Medusa core drops before the payment workflow runs.
+ */
+export function classifyAchEvent(eventType: string): AchState | null {
+  switch (eventType) {
+    case "transaction.check.status.settle": return "settled"
+    case "transaction.check.status.return": return "returned"
+    case "transaction.check.status.latereturn": return "late_returned"
+    default: return null
+  }
+}
+
+/**
  * Map an NMI webhook event to a Medusa action for the unified provider.
  * Card and ACH are disambiguated by `event_body.check` (ACH) vs `event_body.card`.
  * A card `sale.success` is a synchronous capture; an ACH `sale.success` is only

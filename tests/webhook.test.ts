@@ -5,6 +5,7 @@ import {
   verifySignature,
   extractSessionId,
   mapNmiEvent,
+  classifyAchEvent,
 } from "../src/lib/webhook"
 
 const SECRET = "whsec_test_123"
@@ -67,6 +68,13 @@ describe("nmi event mapping", () => {
   })
   it("still maps settlement.batch.complete → captured (core drops it if it has no order_id)", () => {
     expect(mapNmiEvent("settlement.batch.complete", { check: {} })).toBe("captured")
+  })
+  it("classifies the ach lifecycle for reconciliation subscribers", () => {
+    expect(classifyAchEvent("transaction.check.status.settle")).toBe("settled")
+    expect(classifyAchEvent("transaction.check.status.return")).toBe("returned")
+    expect(classifyAchEvent("transaction.check.status.latereturn")).toBe("late_returned")
+    expect(classifyAchEvent("transaction.sale.success")).toBeNull()
+    expect(classifyAchEvent("settlement.batch.complete")).toBeNull()
   })
   it("ach submission rejection (sale.failure) → failed; card sale.failure → null; unknown → null", () => {
     expect(mapNmiEvent("transaction.sale.failure", { check: {} })).toBe("failed")

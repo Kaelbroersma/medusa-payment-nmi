@@ -162,7 +162,16 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
   abstract authorizePayment(input: AuthorizePaymentInput): Promise<AuthorizePaymentOutput>
 
   async capturePayment(input: CapturePaymentInput): Promise<CapturePaymentOutput> {
-    // ACH settles asynchronously (settlement webhook) — capture is a no-op.
+    // ACH settles asynchronously, so there is nothing to send: the debit went out at
+    // authorization and the network decides the rest. This stays a no-op rather than
+    // throwing on a premature admin click, because the settlement webhook captures
+    // through this same method and Medusa passes no way to tell the two callers apart
+    // (payment-provider.js forwards only `data` and an idempotency key — `captured_by`
+    // never reaches a provider). Throwing here would break settlement.
+    //
+    // The consequence: clicking Capture on an unsettled ACH payment still stamps
+    // `captured_at` in Medusa while the money is in flight. Gate fulfillment on the ACH
+    // lifecycle instead of on payment status — see the README.
     if (input.data?.payment_method === "ach") return { data: input.data ?? {} }
     const transactionId = String(input.data?.transactionid)
     const txn = await this.client.transact({ type: "capture", transactionId })
@@ -201,8 +210,26 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
   async cancelPayment(input: CancelPaymentInput): Promise<CancelPaymentOutput> {
     const transactionId = String(input.data?.transactionid)
     // Pre-settlement reversal = void. (Post-settlement use refund.)
-    const txn = await this.client.transact({ type: "void", transactionId })
-    return { data: { ...input.data, canceled: true, raw: txn } }
+    try {
+      const txn = await this.client.transact({ type: "void", transactionId })
+      return { data: { ...input.data, canceled: true, raw: txn } }
+    } catch (voidError) {
+      // A returned ACH debit cannot be voided — the money already came back on its own.
+      // Cancelling the order is exactly the right response to a return, so refusing to
+      // cancel would strand the order (and its inventory reservation) over a reversal
+      // that has, in substance, already happened. Record why the void failed instead of
+      // blocking the cancellation. Card payments keep the strict behaviour: a failed
+      // void there means the authorization may still be live and must be dealt with.
+      if (input.data?.payment_method !== "ach") throw voidError
+      return {
+        data: {
+          ...input.data,
+          canceled: true,
+          void_failed: true,
+          void_error: voidError instanceof Error ? voidError.message : String(voidError),
+        },
+      }
+    }
   }
 
   async getPaymentStatus(input: GetPaymentStatusInput): Promise<GetPaymentStatusOutput> {

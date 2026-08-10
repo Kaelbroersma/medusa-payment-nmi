@@ -31,6 +31,7 @@ settlement webhook finish the job.
 - [Billing address and AVS](#billing-address-and-avs)
 - [Showing the card on receipts](#showing-the-card-on-receipts)
 - [Webhooks](#webhooks)
+- [ACH reconciliation](#ach-reconciliation)
 - [Captures, refunds, and voids](#captures-refunds-and-voids)
 - [Testing against the sandbox](#testing-against-the-sandbox)
 - [Troubleshooting](#troubleshooting)
@@ -594,12 +595,95 @@ NMI requires a public HTTPS endpoint, so for local development tunnel to your ba
 > Returns and voids are detected and mapped correctly by this provider, but `failed` and
 > `canceled` webhook outcomes do not auto-transition the payment in current Medusa core.
 > If you need automated reconciliation for returns, subscribe to the
-> `payment.webhook_received` event and handle it yourself.
+> `payment.webhook_received` event and handle it yourself. See
+> [ACH reconciliation](#ach-reconciliation).
+
+## ACH reconciliation
+
+Medusa's payment status is a card state machine. `authorized` means funds are held and
+`captured` means the money moved and the matter is closed. Neither is true of a bank debit,
+so this provider maps ACH onto the closest available states and you have to supply the rest:
+
+| Reality | What the plugin reports | What it actually means |
+|---|---|---|
+| Debit submitted | `authorized` | Money requested. Nothing is held and nothing has moved. |
+| Settled | `captured` | Money moved, and can still be clawed back for up to 60 days. |
+| Returned | `failed` — **dropped by core** | Money came back. Nothing in Medusa changes on its own. |
+
+Two consequences worth designing around.
+
+**Nothing stops you shipping an unsettled order.** Medusa does not gate fulfillment on
+payment status — `create-fulfillment` contains no `payment_status` check. An ACH order is
+fulfillable the moment it is placed, days before anyone knows whether the money arrives.
+
+**Clicking Capture on an ACH payment lies.** The provider sends nothing, but Medusa still
+stamps `captured_at`, so the order reads as paid while the debit is in flight. The provider
+cannot refuse the click, because the settlement webhook captures through the same method
+and Medusa passes no way to distinguish the callers. Do not press Capture on ACH; let the
+webhook do it.
+
+So gate on the ACH lifecycle rather than on payment status. Subscribe to
+`payment.webhook_received`, classify with the exported helpers, and record the outcome
+somewhere your fulfillment path can read:
+
+```ts
+// src/subscribers/ach-reconciliation.ts
+import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { verifySignature, classifyAchEvent, extractSessionId } from "medusa-payment-nmi"
+
+export default async function achReconciliation({ event, container }: SubscriberArgs<any>) {
+  const { payload } = event.data
+  const raw = Buffer.isBuffer(payload.rawData)
+    ? payload.rawData.toString("utf8")
+    : String(payload.rawData)
+
+  // Re-verify: this subscriber sees every webhook, not just ours.
+  const header = payload.headers?.["webhook-signature"]
+  if (!verifySignature(process.env.NMI_WEBHOOK_SECRET!, raw, header)) return
+
+  const body = JSON.parse(raw)
+  const state = classifyAchEvent(body.event_type)
+  if (!state) return
+
+  const sessionId = extractSessionId(body.event_body ?? {})
+  if (!sessionId) return
+
+  const query = container.resolve(ContainerRegistrationKeys.QUERY)
+  const { data: payments } = await query.graph({
+    entity: "payment",
+    fields: ["id", "payment_collection_id"],
+    filters: { payment_session_id: sessionId },
+  })
+  if (!payments.length) return
+
+  // Resolve the order from the payment collection, then act on `state`:
+  //   settled       -> mark fulfillable
+  //   returned      -> cancel if unfulfilled (frees the reservation), else raise a claim
+  //   late_returned -> alert only; the order is long closed
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+  logger.warn(`NMI ACH ${state} for payment session ${sessionId}`)
+}
+
+export const config: SubscriberConfig = { event: "payment.webhook_received" }
+```
+
+The order lookup from a payment collection differs across Medusa 2.x minors, so verify that
+traversal against your version rather than copying it blind.
+
+On a return, cancelling an unfulfilled order is usually the right move: `cancel-order`
+runs `deleteReservationsByLineItemsStep`, which frees the inventory the order was holding.
+It also runs `cancelPaymentStep` against uncaptured payments, which would try to void a
+debit that has already come back — this provider tolerates that failure for ACH and records
+`void_failed` on the payment data rather than blocking the cancellation. If the order was
+already fulfilled there is no reservation to release and cancelling is not appropriate;
+that case needs a claim and a human.
 
 ## Captures, refunds, and voids
 
 **Capture** sends an NMI `capture` against the stored `transactionid`. For ACH it is a
-no-op, since settlement is what captures those.
+no-op, since settlement is what captures those — and pressing it anyway records a
+misleading capture. See [ACH reconciliation](#ach-reconciliation).
 
 **Refund** sends an NMI `refund`. NMI can only refund a settled transaction, which means a
 same-day reversal has to be a void instead. Rather than making you know that, the provider

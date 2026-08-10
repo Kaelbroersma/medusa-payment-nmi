@@ -37,3 +37,19 @@ export {
   NmiAchProviderService,
   NmiWalletProviderService,
 }
+
+/**
+ * Webhook helpers, exported so a `payment.webhook_received` subscriber can reuse the
+ * same signature verification and event classification the providers use. Needed
+ * because Medusa core drops `failed` outcomes — an ACH return never reaches the
+ * payment workflow, so reconciling one is application-side work.
+ * See the ACH reconciliation section of the README.
+ */
+export {
+  verifySignature,
+  parseSignatureHeader,
+  extractSessionId,
+  mapNmiEvent,
+  classifyAchEvent,
+} from "./lib/webhook"
+export type { NmiAction, AchState } from "./lib/webhook"

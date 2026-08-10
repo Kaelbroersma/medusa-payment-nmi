@@ -85,6 +85,41 @@ describe("nmi-ach", () => {
     expect(transact).not.toHaveBeenCalled()
     expect(res.data.payment_method).toBe("ach")
   })
+
+  it("cancels even when the void fails, since a returned debit cannot be voided", async () => {
+    const { svc } = makeService(NmiAchProviderService)
+    svc.client = {
+      transact: vi.fn(async () => {
+        throw new Error("NMI transaction declined: Transaction already returned")
+      }),
+    }
+    const res = await svc.cancelPayment({ data: { payment_method: "ach", transactionid: "tx_1" } })
+    expect(res.data.canceled).toBe(true)
+    expect(res.data.void_failed).toBe(true)
+    expect(res.data.void_error).toContain("already returned")
+  })
+
+  it("still voids normally when the debit has not returned", async () => {
+    const { svc, transact } = makeService(NmiAchProviderService)
+    const res = await svc.cancelPayment({ data: { payment_method: "ach", transactionid: "tx_1" } })
+    expect(transact).toHaveBeenCalledWith(expect.objectContaining({ type: "void" }))
+    expect(res.data.canceled).toBe(true)
+    expect(res.data.void_failed).toBeUndefined()
+  })
+})
+
+describe("card cancel stays strict", () => {
+  it("propagates a failed void, since the authorization may still be live", async () => {
+    const { svc } = makeService(NmiCardProviderService)
+    svc.client = {
+      transact: vi.fn(async () => {
+        throw new Error("NMI transaction error: gateway timeout")
+      }),
+    }
+    await expect(
+      svc.cancelPayment({ data: { payment_method: "card", transactionid: "tx_1" } })
+    ).rejects.toThrow("gateway timeout")
+  })
 })
 
 describe("nmi-wallet", () => {
