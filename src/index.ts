@@ -14,7 +14,7 @@ import { NmiWalletProviderService } from "./providers/nmi-wallet"
  *       options: {
  *         securityKey: process.env.NMI_SECURITY_KEY,
  *         tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
- *         webhookSecret: process.env.NMI_WEBHOOK_SECRET,
+ *         webhookSecret: process.env.NMI_WEBHOOK_SECRET, // ACH only
  *       },
  *     },
  *   ]
@@ -49,7 +49,10 @@ export {
   verifySignature,
   parseSignatureHeader,
   extractSessionId,
+  isMedusaSessionId,
   mapNmiEvent,
   classifyAchEvent,
 } from "./lib/webhook"
 export type { NmiAction, AchState } from "./lib/webhook"
+export { NmiError, buyerMessageFor } from "./lib/errors"
+export type { NmiOptions } from "./types"

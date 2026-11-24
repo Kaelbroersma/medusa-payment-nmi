@@ -25,6 +25,8 @@ export const NmiAchFields = forwardRef<
   {
     session: Session
     onToken: (data: NmiAchTokenData) => void
+    /** Tokenization failed or timed out; re-enable your submit button here. */
+    onError?: (message: string) => void
     customCss?: Parameters<typeof useCollectJs>[0]["customCss"]
     /** Google Font loaded inside the iframes, e.g. "Inter:400". */
     googleFont?: string
@@ -34,7 +36,7 @@ export const NmiAchFields = forwardRef<
     selectClassName?: string
   }
 >(function NmiAchFields(
-  { session, onToken, customCss, googleFont, className, fieldClassName, labelClassName, selectClassName },
+  { session, onToken, onError, customCss, googleFont, className, fieldClassName, labelClassName, selectClassName },
   ref
 ) {
   const [accountType, setAccountType] = useState<"checking" | "savings">("checking")
@@ -51,6 +53,7 @@ export const NmiAchFields = forwardRef<
     paymentType: "ck",
     googleFont,
     customCss,
+    onError,
     onToken: (response: CollectJsResponse) =>
       onToken({
         payment_token: response.token,

@@ -37,8 +37,14 @@ const fieldsRef = useRef<NmiFieldsHandle>(null)
         provider_id: "pp_nmi-card",
         data, // { payment_token, payment_method: "card" }
       })
-      await completeCart(cart.id)
+      const res = await sdk.store.cart.complete(cart.id)
+      if (res.type !== "order") {
+        // A decline: res.error.message is written for the buyer.
+        showError(res.error?.message)
+        setSubmitting(false)
+      }
     }}
+    onError={() => setSubmitting(false)}
   />
 )}
 
@@ -56,6 +62,7 @@ const fieldsRef = useRef<NmiFieldsHandle>(null)
 |---|---|---|
 | `session` | payment session | Read for `data.tokenizationKey` and `data.sandbox`. Renders a placeholder message until the key is there. |
 | `onToken` | `(data) => void` | Fires once tokenization succeeds. Write `data` onto the session, then complete the cart. |
+| `onError` | `(message: string) => void` | Fires when tokenization fails: Collect.js did not load, NMI returned no token, or the request timed out after 15 seconds. `onToken` does not fire in those cases, so reset your submitting state here. |
 | `customCss` | `{ base?, focus?, invalid?, placeholder? }` | CSS applied inside NMI's iframes. Your own stylesheet cannot reach in. |
 | `googleFont` | `string` | Font spec such as `"Inter:400"`, loaded inside the iframes. |
 | `className`, `fieldClassName`, `labelClassName` | `string` | Applied to your wrapper, the field boxes, and the labels. |

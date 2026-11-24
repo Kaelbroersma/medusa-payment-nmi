@@ -4,23 +4,33 @@ import { createHmac, timingSafeEqual } from "crypto"
 export function parseSignatureHeader(
   header: string | undefined
 ): { nonce: string; signature: string } | null {
-  if (!header) return null
+  if (!header || typeof header !== "string") return null
   let nonce = "", signature = ""
   for (const part of header.split(",")) {
-    const [k, v] = part.split("=")
-    if (k?.trim() === "t") nonce = v?.trim() ?? ""
-    if (k?.trim() === "s") signature = v?.trim() ?? ""
+    const eq = part.indexOf("=")
+    if (eq < 0) continue
+    const k = part.slice(0, eq).trim()
+    const v = part.slice(eq + 1).trim()
+    if (k === "t") nonce = v
+    if (k === "s") signature = v
   }
   if (!nonce || !signature) return null
   return { nonce, signature }
 }
 
-/** Verify HMAC-SHA256(nonce + "." + rawBody, secret) against the header signature. */
+/**
+ * Verify HMAC-SHA256(nonce + "." + rawBody, secret) against the header signature.
+ * This is the scheme in NMI's own sample (docs.nmi.com/reference/overview, "How to
+ * Validate"): `hash_hmac("sha256", $nonce . "." . $webhookBody, $signingKey)`,
+ * hex encoded. A missing secret never verifies: an unsigned or unverifiable
+ * webhook must not be able to move a payment.
+ */
 export function verifySignature(
-  secret: string,
+  secret: string | undefined,
   rawBody: string,
   header: string | undefined
 ): boolean {
+  if (!secret || typeof secret !== "string") return false
   const parsed = parseSignatureHeader(header)
   if (!parsed) return false
   const expected = createHmac("sha256", secret)
@@ -35,13 +45,23 @@ export function verifySignature(
  * We send it as both `orderid` and `merchant_defined_field_1`, so read either.
  */
 export function extractSessionId(eventBody: Record<string, any>): string {
-  return (
-    eventBody.order_id ??
-    eventBody.order?.order_id ??
-    eventBody.merchant_defined_field_1 ??
-    eventBody.merchant_defined_fields?.["1"] ??
+  // `||`, not `??`: NMI sends `order_id: ""` on events that have none.
+  const id =
+    eventBody.order_id ||
+    eventBody.order?.order_id ||
+    eventBody.merchant_defined_field_1 ||
+    eventBody.merchant_defined_fields?.["1"] ||
     ""
-  )
+  return typeof id === "string" ? id : String(id)
+}
+
+/**
+ * True when the id is a Medusa payment session id. An NMI account can be shared
+ * with other systems whose order ids mean nothing here; handing one of those to
+ * Medusa's payment workflow makes it fail and retry for no reason.
+ */
+export function isMedusaSessionId(id: string): boolean {
+  return id.startsWith("payses_")
 }
 
 /** Medusa payment action returned from getWebhookActionAndData. */
@@ -71,20 +91,37 @@ export function classifyAchEvent(eventType: string): AchState | null {
 }
 
 /**
- * Map an NMI webhook event to a Medusa action for the unified provider.
- * Card and ACH are disambiguated by `event_body.check` (ACH) vs `event_body.card`.
- * A card `sale.success` is a synchronous capture; an ACH `sale.success` is only
- * an accepted submission (authorized) — the ACH network settles days later and
- * reports the outcome through the `transaction.check.status.*` family.
+ * Map an NMI webhook event to a Medusa action, or null to ignore it.
  *
- * `settlement.batch.complete` stays mapped but is inert in practice. Its documented body
- * is card-only (`processor.type: "cc"`, a `by_card_type` breakdown) and carries batch
- * totals with no `order_id` at any level, so `extractSessionId` finds nothing and Medusa's
- * webhook subscriber drops the event before the payment workflow runs. It is kept as a
- * harmless no-op rather than removed, so that an account which does somehow deliver it
- * with an order id still resolves. Nothing about ACH should depend on it.
- * See https://docs.nmi.com/reference/settlement-events
- * and https://docs.nmi.com/reference/check-status
+ * Only the ACH outcomes are mapped, because ACH is the only payment that finishes
+ * after the request that started it:
+ *
+ *  - `transaction.check.status.settle` captures the payment.
+ *  - `transaction.check.status.return` / `.latereturn` and an ACH
+ *    `transaction.sale.failure` report `failed`. Medusa core drops `failed` before
+ *    the payment workflow runs, so a `payment.webhook_received` subscriber has to
+ *    act on those (see `classifyAchEvent`).
+ *
+ * Every other transaction event is ignored on purpose. Card and wallet payments,
+ * and the ACH submission itself, are decided inside the request that made them,
+ * so Medusa already has the outcome when the event arrives and the event can only
+ * race it:
+ *
+ *  - `sale.success` / `auth.success` / `capture.success` reach Medusa's payment
+ *    workflow about five seconds after the charge. If the payment row is not
+ *    there yet the workflow authorizes the session a second time; if the cart
+ *    failed to complete and the charge was voided, it tries to complete the cart
+ *    again against the voided payment.
+ *  - `refund.success` carries a negative amount and usually no order id. Mapping
+ *    it to `captured` never recorded a refund in Medusa; it could only ask for a
+ *    capture of a negative amount.
+ *  - `void.success` maps to `canceled`, which core discards.
+ *  - `settlement.batch.complete` is a batch total with no order id.
+ *
+ * A refund or void made in the NMI portal is therefore not reflected in Medusa.
+ * Make them from Medusa.
+ *
+ * See https://docs.nmi.com/reference/check-status
  */
 export function mapNmiEvent(
   eventType: string,
@@ -92,17 +129,13 @@ export function mapNmiEvent(
 ): NmiAction | null {
   const ach = !!eventBody.check
   switch (eventType) {
-    case "transaction.auth.success": return "authorized"
-    case "transaction.sale.success": return ach ? "authorized" : "captured"
-    case "transaction.capture.success": return "captured"
-    case "settlement.batch.complete": return "captured"
-    case "transaction.refund.success": return "captured"
-    case "transaction.void.success": return "canceled"
-    case "transaction.sale.failure": return ach ? "failed" : null
     // ACH settlement outcomes, days after the debit was accepted.
     case "transaction.check.status.settle": return "captured"
     case "transaction.check.status.return": return "failed"
     case "transaction.check.status.latereturn": return "failed"
+    // An ACH debit rejected at submission. Informational: the request that
+    // submitted it already failed.
+    case "transaction.sale.failure": return ach ? "failed" : null
     default: return null
   }
 }

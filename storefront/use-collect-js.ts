@@ -96,6 +96,8 @@ export function useCollectJs({
   googleFont,
   customCss,
   onToken,
+  onError,
+  timeoutMs = 15000,
 }: {
   tokenizationKey: string | undefined
   sandbox?: boolean
@@ -118,12 +120,26 @@ export function useCollectJs({
     placeholder?: Record<string, string>
   }
   onToken: (response: CollectJsResponse) => void
+  /** Called whenever tokenization cannot produce a token: the script failed to
+   *  load, the request timed out, or NMI returned no token. Use it to re-enable
+   *  your submit button; without it a failed request leaves the form "submitting"
+   *  forever, because onToken never fires. */
+  onError?: (message: string) => void
+  /** How long to wait for NMI to return a token before giving up. Default 15s. */
+  timeoutMs?: number
 }) {
   const [ready, setReady] = useState(false)
   const [validity, setValidity] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
   const onTokenRef = useRef(onToken)
   onTokenRef.current = onToken
+  const onErrorRef = useRef(onError)
+  onErrorRef.current = onError
+
+  const fail = useCallback((message: string) => {
+    setError(message)
+    onErrorRef.current?.(message)
+  }, [])
 
   useEffect(() => {
     if (!tokenizationKey) return
@@ -144,13 +160,18 @@ export function useCollectJs({
           focusCss: customCss?.focus,
           invalidCss: customCss?.invalid,
           placeholderCss: customCss?.placeholder,
+          // Without a timeout a tokenization request that never answers (blocked
+          // iframe, dropped connection) leaves the buyer on a spinner for good.
+          timeoutDuration: timeoutMs,
+          timeoutCallback: () =>
+            fail("The payment form did not respond. Please check your connection and try again."),
           fieldsAvailableCallback: () => setReady(true),
           validationCallback: (field: string, valid: boolean) => {
             setValidity((v) => ({ ...v, [field]: valid }))
           },
           callback: (response: CollectJsResponse) => {
             if (!response?.token) {
-              setError("Payment could not be tokenized. Please re-check your details.")
+              fail("Payment could not be tokenized. Please re-check your details.")
               return
             }
             setError(null)
@@ -158,7 +179,7 @@ export function useCollectJs({
           },
         })
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => fail(e instanceof Error ? e.message : String(e)))
     return () => {
       cancelled = true
       // Full teardown so the next mount (or the other payment method's
@@ -178,8 +199,12 @@ export function useCollectJs({
   /** Tokenize the mounted fields; the result arrives via onToken. */
   const requestToken = useCallback(() => {
     setError(null)
-    window.CollectJS?.startPaymentRequest()
-  }, [])
+    if (!window.CollectJS) {
+      fail("The payment form is not ready yet. Please wait a moment and try again.")
+      return
+    }
+    window.CollectJS.startPaymentRequest()
+  }, [fail])
 
   return { ready, isValid, error, requestToken }
 }

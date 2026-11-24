@@ -33,9 +33,13 @@ settlement webhook finish the job.
 - [Webhooks](#webhooks)
 - [ACH reconciliation](#ach-reconciliation)
 - [Captures, refunds, and voids](#captures-refunds-and-voids)
+- [Declines and what the buyer sees](#declines-and-what-the-buyer-sees)
+- [Lost responses and the Query API](#lost-responses-and-the-query-api)
+- [Finding a payment in the NMI portal](#finding-a-payment-in-the-nmi-portal)
 - [Testing against the sandbox](#testing-against-the-sandbox)
 - [Troubleshooting](#troubleshooting)
 - [Not supported yet](#not-supported-yet)
+- [Upgrading to 0.5](#upgrading-to-05)
 - [Local development](#local-development)
 - [Disclaimer](#disclaimer)
 
@@ -43,8 +47,13 @@ settlement webhook finish the job.
 
 - Medusa `>= 2.5` (the package declares `@medusajs/framework` as a peer dependency)
 - Node `>= 20`
-- An NMI merchant account with three keys from the Merchant Portal: a private security
-  key, a public tokenization key, and a webhook signing key
+- An NMI merchant account with two keys from the Merchant Portal: a private security key
+  and a public tokenization key
+- A third key, the webhook signing key, if you take ACH. Card and wallet payments do not
+  need it
+- The **Query API** permission on the security key. The plugin works without it, but it
+  cannot then recover a charge whose response was lost. See
+  [Lost responses and the Query API](#lost-responses-and-the-query-api)
 
 ## Install
 
@@ -82,7 +91,7 @@ module.exports = defineConfig({
             options: {
               securityKey: process.env.NMI_SECURITY_KEY,
               tokenizationKey: process.env.NMI_TOKENIZATION_KEY,
-              webhookSecret: process.env.NMI_WEBHOOK_SECRET,
+              webhookSecret: process.env.NMI_WEBHOOK_SECRET, // ACH only
               captureMethod: "auth",
               secCode: "WEB",
               sandbox: process.env.NODE_ENV !== "production",
@@ -95,8 +104,9 @@ module.exports = defineConfig({
 })
 ```
 
-Copy `.env.example` for the variable names. The three keys live in the NMI Merchant
-Portal under Settings, in Security Keys and Webhooks.
+Copy `.env.example` for the variable names. The keys live in the NMI Merchant Portal under
+Settings, in Security Keys and Webhooks. When you create the security key, give it the
+Query API permission as well as the Payment API one.
 
 ### 2. Enable it for a region
 
@@ -110,9 +120,10 @@ Copy the components you need out of [`storefront/`](./storefront) into your Next
 There are two collection styles and they are covered in detail under
 [Collecting card and bank details](#collecting-card-and-bank-details).
 
-### 4. Point NMI at your webhook
+### 4. Point NMI at your webhook (ACH only)
 
-ACH will sit in `authorized` forever without this. See [Webhooks](#webhooks).
+ACH will sit in `authorized` forever without this. See [Webhooks](#webhooks). A store that
+takes only cards and wallets has no webhook to set up and can skip this step.
 
 ## Choosing providers
 
@@ -153,13 +164,27 @@ before you hardcode an id in the storefront.
 |---|---|---|---|
 | `securityKey` | Yes | | Private API key used server side for `transact.php`. Never send it to the browser. |
 | `tokenizationKey` | Yes | | Public key. The provider hands it to the storefront through the payment session. |
-| `webhookSecret` | Yes | | Webhook signing key, used to verify the HMAC on every inbound event. |
+| `webhookSecret` | For ACH | | Webhook signing key, used to verify the HMAC on every inbound event. Without it ACH payments are refused and all webhooks are ignored. |
 | `captureMethod` | No | `"auth"` | Card and wallet only. `"auth"` holds the funds, `"sale"` charges immediately. |
 | `secCode` | No | `"WEB"` | ACH SEC code. `WEB`, `PPD`, `CCD`, or `TEL`. |
 | `sandbox` | No | `false` | Routes both the API calls and the storefront's Collect.js script to `sandbox.nmi.com`. |
+| `timeoutMs` | No | `60000` | How long to wait for NMI to answer a Payment API request before treating the response as lost. |
 
-All three keys are validated at boot. A missing one throws a `MedusaError` with the name
-of the option, so a bad deploy fails fast instead of failing at the first checkout.
+`securityKey` and `tokenizationKey` are validated at boot. A missing one throws a
+`MedusaError` with the name of the option, so a bad deploy fails fast instead of failing at
+the first checkout.
+
+`webhookSecret` is not validated at boot, on purpose. Resolving the package root registers
+all four providers with one block of options, so requiring the signing key there would stop
+a card-only store from starting over a key it never uses. It is enforced where it matters
+instead:
+
+- With no `webhookSecret`, an ACH authorization is refused before anything is sent to NMI.
+  An ACH debit is only finished by its settlement webhook, and a webhook that cannot be
+  verified is never acted on, so the payment could never complete.
+- With no `webhookSecret`, every inbound webhook is ignored. There is no mode in which an
+  unsigned event is accepted.
+- The plugin logs one warning at startup so the missing key is visible.
 
 ## How a payment moves through the system
 
@@ -270,22 +295,37 @@ Order button drives tokenization instead of a second button appearing inside the
 ```tsx
 const fieldsRef = useRef<NmiFieldsHandle>(null)
 const [submitting, setSubmitting] = useState(false)
+const [payError, setPayError] = useState<string | null>(null)
 
 async function handleToken(data: Record<string, unknown>) {
-  await sdk.store.payment.initiatePaymentSession(cart, {
-    provider_id: "pp_nmi-card",
-    data, // { payment_token, payment_method: "card" }
-  })
-  const res = await sdk.store.cart.complete(cart.id)
-  if (res.type === "order") {
-    window.location.href = `/order/confirmed/${res.order.id}`
+  try {
+    await sdk.store.payment.initiatePaymentSession(cart, {
+      provider_id: "pp_nmi-card",
+      data, // { payment_token, payment_method: "card" }
+    })
+    const res = await sdk.store.cart.complete(cart.id)
+    if (res.type === "order") {
+      window.location.href = `/order/confirmed/${res.order.id}`
+      return
+    }
+    // A declined card is not an exception: Medusa answers 200 with the cart and
+    // an error whose message is written for the buyer.
+    setPayError(res.error?.message ?? "Your payment could not be completed.")
+  } catch (e) {
+    setPayError("Something went wrong placing your order. Please try again.")
   }
   setSubmitting(false)
 }
 
 {selected === "pp_nmi-card" && (
-  <NmiCardFields ref={fieldsRef} session={activeSession} onToken={handleToken} />
+  <NmiCardFields
+    ref={fieldsRef}
+    session={activeSession}
+    onToken={handleToken}
+    onError={() => setSubmitting(false)} // tokenization failed or timed out
+  />
 )}
+{payError && <p role="alert">{payError}</p>}
 
 <button
   disabled={submitting || !fieldsRef.current?.isValid}
@@ -352,8 +392,13 @@ submit button on `isValid` is safe from the first render.
 
 Calling `requestToken()` triggers `CollectJS.startPaymentRequest()`. The token comes back
 through the callback and lands in your `onToken` handler. If NMI returns a response with
-no token, the components surface an error message and the shopper can correct the fields
-and try again.
+no token, if the request gets no answer within 15 seconds, or if Collect.js never loaded,
+the components show an error message and call `onError`. Reset your "submitting" state
+there. `onToken` does not fire in any of those cases, so a button that is only re-enabled
+in `onToken` would stay disabled for good.
+
+After a failed charge, tokenize again before the next attempt. The token is spent as soon
+as it has been submitted once, whether or not the charge was approved.
 
 Tokens are single use and NMI expires them 24 hours after creation. In practice this only
 matters if you tokenize on one page and complete the cart much later; if the charge fails
@@ -440,6 +485,8 @@ Everything the backend needs at authorize time has to be on `session.data`. Each
 | `account_holder_type` | Storefront | ACH | `"personal"` or `"business"`. |
 | `billing` | Storefront, server side | Recommended | Cardholder address for AVS. See below. |
 | `card_type`, `card_last4`, `card_exp` | Storefront | Optional | Display metadata, passed through to `payment.data`. |
+| `ip_address` | Storefront, server side | Recommended | The buyer's IP address, sent to NMI as `ipaddress` for its fraud screening. Ignored unless it is a valid IPv4 or IPv6 address. |
+| `order_description` | Storefront, server side | Optional | Free text shown against the transaction in the NMI portal, sent as `order_description` (255 characters at most). |
 
 ## Billing address and AVS
 
@@ -487,8 +534,12 @@ code is missing, the whole billing block is dropped rather than sent with blanks
 charge goes through without AVS for that order.
 
 NMI's answers come back on `payment.data` as `avs_response` and `cvv_response`, which makes
-them queryable later. On a decline the full gateway result is attached to the thrown
-`NmiError` as `error.raw`, so those two codes are reachable there too.
+them queryable later. On a decline the gateway's response text and code are written to the
+Medusa log, next to the payment session id.
+
+The payment module gives the provider no request context either, so the buyer's IP address
+has to travel the same way. Read it from the request headers in your server action and put
+it on the session as `ip_address`; NMI recommends sending it.
 
 AVS is a card-side control. The address is sent on ACH as well, which is harmless and helps
 fraud scoring.
@@ -519,23 +570,21 @@ Log the `card` object once against your own account before relying on either fie
 
 ## Webhooks
 
+**Webhooks are for ACH.** A card or wallet payment is decided inside the request that makes
+it, so Medusa already knows the outcome and there is nothing for a webhook to add. An ACH
+debit is accepted at checkout and settles, or comes back, days later; the webhook is the
+only way Medusa finds out. If you do not take ACH you do not need to create a webhook in the
+NMI portal at all, and you can leave `webhookSecret` unset.
+
 Medusa exposes one webhook route per registered provider, at
 `/hooks/payment/<identifier>`. Registering the package root creates all four:
 
 | Provider | Route | Configure it in the portal? |
 |---|---|---|
-| `nmi` | `POST https://<your-backend>/hooks/payment/nmi` | Yes, if you use the unified provider. |
 | `nmi-ach` | `POST https://<your-backend>/hooks/payment/nmi-ach` | Yes. ACH cannot complete without it. |
-| `nmi-card` | `POST https://<your-backend>/hooks/payment/nmi-card` | Optional. |
-| `nmi-wallet` | `POST https://<your-backend>/hooks/payment/nmi-wallet` | Optional. |
-
-Every route exists whether or not you point NMI at it, and every route runs the same
-verification and mapping. What differs is whether you need it. ACH is the only
-asynchronous provider, so a split setup needs the `nmi-ach` destination or payments sit in
-`authorized` forever. Card and wallet payments learn their outcome during the request, so
-their routes are useful only if you want a second record of the outcome, or if you reverse
-transactions from the NMI portal rather than the Medusa admin and want Medusa to hear about
-it.
+| `nmi` | `POST https://<your-backend>/hooks/payment/nmi` | Yes, if you take ACH through the unified provider. |
+| `nmi-card` | `POST https://<your-backend>/hooks/payment/nmi-card` | No. Card events are ignored. |
+| `nmi-wallet` | `POST https://<your-backend>/hooks/payment/nmi-wallet` | No. Wallet events are ignored. |
 
 Setting an `id` on the provider config appends it to the path, so `id: "primary"` gives
 `/hooks/payment/nmi-ach_primary` and so on.
@@ -549,50 +598,60 @@ choose it. Once the URL is saved, delivery starts with no further setup.
 Subscribe to:
 
 ```
-transaction.sale.success      transaction.sale.failure
-transaction.auth.success      transaction.capture.success
-transaction.refund.success    transaction.void.success
-
-settlement.batch.complete
-
-transaction.check.status.settle       (ACH only)
-transaction.check.status.return       (ACH only)
-transaction.check.status.latereturn   (ACH only)
+transaction.check.status.settle
+transaction.check.status.return
+transaction.check.status.latereturn
+transaction.sale.failure
 ```
 
-The three `check.status` events are how an ACH payment finishes, and they are the only ones
-to rely on for it. Each carries `order_id`, `transaction_id`, `merchant_defined_fields`,
-and the amount at `action.amount`, so they always match back to a payment session.
-
-`settlement.batch.complete` is still handled, but treat it as inert. Its documented body is
-card-only — `processor.type: "cc"` with a `by_card_type` breakdown — and contains batch
-totals with no `order_id` at any level, so Medusa drops it for want of a session to attach
-it to. Subscribing to it is harmless; depending on it for ACH is not.
+The three `check.status` events are how an ACH payment finishes. Each carries `order_id`,
+`transaction_id`, and the amount at `action.amount`, so they match back to a payment
+session. Subscribing to more event types does no harm; the provider ignores them.
 
 ### How events are interpreted
 
-The same event means different things for a card and for a bank debit, so the handler looks
-at `event_body.check` to tell them apart.
-
-| NMI event | Card | ACH |
+| NMI event | Card or wallet | ACH |
 |---|---|---|
-| `transaction.auth.success` | authorized | authorized |
-| `transaction.sale.success` | captured | authorized (accepted, not settled) |
-| `transaction.capture.success` | captured | captured |
-| `transaction.refund.success` | captured | captured |
-| `transaction.void.success` | canceled | canceled |
-| `transaction.sale.failure` | ignored | failed (rejected at submission) |
 | `transaction.check.status.settle` | — | captured |
 | `transaction.check.status.return` | — | failed |
 | `transaction.check.status.latereturn` | — | failed |
-| `settlement.batch.complete` | captured | captured |
+| `transaction.sale.failure` | ignored | failed (rejected at submission) |
+| `transaction.sale.success`, `transaction.auth.success`, `transaction.capture.success` | ignored | ignored |
+| `transaction.refund.success`, `transaction.void.success` | ignored | ignored |
+| `settlement.batch.complete` | ignored | ignored |
+
+Before 0.5.0 the transaction events were mapped too. They are ignored now because they could
+only do harm:
+
+- `sale.success`, `auth.success` and `capture.success` describe something Medusa was told in
+  the response to its own request. The event arrives about five seconds later and can only
+  race it. If the payment row is not written yet, Medusa's payment workflow authorizes the
+  session a second time. If the cart failed to complete and the charge was voided, it tries
+  to complete the cart again against the voided payment.
+- `refund.success` was mapped to `captured`. NMI's sample for that event has an empty
+  `order_id` and a negative amount, so it either matched nothing or asked Medusa to capture
+  a negative amount. It never recorded a refund.
+- `void.success` was mapped to `canceled`, which Medusa's webhook subscriber discards.
+- `settlement.batch.complete` is a card batch total with no `order_id` at any level.
+
+**A refund or void made in the NMI portal is not reflected in Medusa.** Nothing in this
+plugin, and nothing in Medusa's webhook handling, turns a portal refund into a Medusa
+refund. Refund and cancel from the Medusa admin, which calls NMI for you, so the two stay
+in step.
+
+An event is also ignored when its `order_id` is not a Medusa payment session id (they start
+with `payses_`). That keeps transactions made by another system on the same NMI account out
+of Medusa's payment workflow.
 
 Every request is verified before any of that happens. NMI signs with a
 `Webhook-Signature: t=<nonce>,s=<signature>` header, and the handler recomputes
-`HMAC-SHA256(nonce + "." + rawBody)` with your signing key and compares in constant time. A
-mismatch returns `not_supported`, which means the event is ignored silently. If a webhook
-seems to do nothing at all, check the signing key first, then check that nothing in front
-of Medusa is re-encoding the request body.
+`HMAC-SHA256(nonce + "." + rawBody)` with your signing key, hex encoded, and compares in
+constant time. That is the scheme in NMI's own
+[validation sample](https://docs.nmi.com/reference/overview). The event is then read from
+the same bytes that were verified. A mismatch returns `not_supported`, which means the event
+is ignored, and a warning is logged. If a webhook seems to do nothing at all, check the
+signing key first, then check that nothing in front of Medusa is re-encoding the request
+body.
 
 NMI requires a public HTTPS endpoint with valid TLS, so for local development tunnel to
 your backend with `cloudflared` or `ngrok`.
@@ -617,11 +676,10 @@ need different behaviour.
 
 > **On asynchronous outcomes.** Medusa's built-in payment webhook subscriber acts on the
 > `authorized` and `captured` outcomes. ACH settlement therefore works out of the box.
-> Returns and voids are detected and mapped correctly by this provider, but `failed` and
-> `canceled` webhook outcomes do not auto-transition the payment in current Medusa core.
-> If you need automated reconciliation for returns, subscribe to the
-> `payment.webhook_received` event and handle it yourself. See
-> [ACH reconciliation](#ach-reconciliation).
+> Returns are detected and mapped to `failed` by this provider, but a `failed` webhook
+> outcome does not transition the payment in current Medusa core. If you need automated
+> reconciliation for returns, subscribe to the `payment.webhook_received` event and handle
+> it yourself. See [ACH reconciliation](#ach-reconciliation).
 
 ## ACH reconciliation
 
@@ -704,24 +762,136 @@ debit that has already come back — this provider tolerates that failure for AC
 already fulfilled there is no reservation to release and cancelling is not appropriate;
 that case needs a claim and a human.
 
+That tolerance is checked against NMI. When an ACH void fails, the provider asks the Query
+API what state the transaction is in. If the debit is still pending settlement or has
+settled, the cancellation is refused: letting it through would cancel the order while the
+buyer is still charged. If the transaction has failed or is already voided, the cancellation
+goes ahead. If the state cannot be read, because the security key has no Query permission,
+the cancellation goes ahead as before and an error is logged asking you to confirm the
+debit in the portal.
+
 ## Captures, refunds, and voids
 
-**Capture** sends an NMI `capture` against the stored `transactionid`. For ACH it is a
-no-op, since settlement is what captures those — and pressing it anyway records a
-misleading capture. See [ACH reconciliation](#ach-reconciliation).
+**Capture** sends an NMI `capture` against the stored `transactionid`, for the amount that
+was authorized. Medusa does not pass a capture amount to payment providers, so a capture is
+always for the full authorization; a partial capture entered in Medusa still captures the
+whole amount at NMI. For ACH capture is a no-op, since settlement is what captures those —
+and pressing it anyway records a misleading capture. See
+[ACH reconciliation](#ach-reconciliation).
 
 **Refund** sends an NMI `refund`. NMI can only refund a settled transaction, which means a
 same-day reversal has to be a void instead. Rather than making you know that, the provider
-retries a failed full-amount refund as a void, so the Refund button in the admin works
+retries a rejected full-amount refund as a void, so the Refund button in the admin works
 before the settlement batch runs. The result is marked with `voided: true` on
 `payment.data` so you can tell the two apart afterwards. Partial refunds cannot be voided,
 because a void is all or nothing, so those surface the original NMI error.
 
-**Cancel** sends a void, which is the correct pre-settlement reversal.
+Two limits on that fallback. It needs to know the original amount, which the provider
+records on the payment from 0.5.0 onward; a payment authorized by an earlier version has no
+recorded amount, so a same-day refund of one fails with NMI's error and has to be voided in
+the portal. And it never runs when the refund's own outcome is unknown, for the reason given
+under [Lost responses](#lost-responses-and-the-query-api).
 
-Network failures and NMI's 4xx gateway response codes are retried up to twice with
-exponential backoff. Declines are not retried; they throw an `NmiError` carrying the
-response code and the full gateway result.
+**Cancel** sends a void, which is the correct pre-settlement reversal. If the void fails
+and NMI reports the transaction as already voided, the cancellation succeeds. If NMI reports
+it as settled, the error says to refund it instead.
+
+A void or refund of an ACH payment is sent with `payment=check`. NMI assumes a card
+transaction otherwise.
+
+When any of these fails, the admin sees NMI's reason in the error rather than a generic
+message.
+
+## Declines and what the buyer sees
+
+A declined card is not a crash. The provider throws a `MedusaError` of type
+`payment_authorization_error`, which Medusa's cart-completion route returns to the
+storefront with HTTP 200:
+
+```json
+{ "type": "cart", "cart": { }, "error": { "type": "payment_authorization_error", "message": "Your card was declined for insufficient funds. Please use a different card." } }
+```
+
+Show `error.message` to the buyer. It is written for them and it never repeats the
+gateway's text, because issuer responses include things like "pick up card" and "stolen
+card" that should not be put in front of the person holding the card.
+
+| Situation | What the buyer is told |
+|---|---|
+| Insufficient funds, over limit | That, plainly. |
+| Bad card number, expiry, or CVV | Which of the three to check. |
+| Any other issuer decline, including lost, stolen, and fraud responses | "Your card was declined. Please use a different card or contact your bank." |
+| Gateway rejection (AVS or CVV rules you set in the portal) | To check the card details and billing address. |
+| Gateway or processor error | A generic "could not process", with no suggestion that the card is at fault. |
+| Rate limited | To wait a minute. |
+| Duplicate transaction rejected by NMI | To contact you before trying again. |
+| Outcome unknown | Not to try again, and to contact you. See below. |
+
+The gateway's own response text and code go to the Medusa log with the payment session id.
+`buyerMessageFor` and `NmiError` are exported if you want to produce the same messages
+elsewhere.
+
+After a decline the token is spent. Tokenize again before the next attempt.
+
+## Lost responses and the Query API
+
+NMI's Payment API has no idempotency key. If a sale is sent and the response never arrives,
+because of a timeout, a dropped connection, an HTTP 5xx, or NMI's own "communication error"
+codes 420 and 421, the plugin does not know whether the card was charged. Treating that as a
+failure is how a buyer gets charged for an order that does not exist.
+
+So a lost response is never treated as a failure, and a sale is never blindly sent again.
+The plugin asks NMI what happened, through the Query API, using the `orderid` it sent with
+the charge:
+
+| What the lookup shows | Result |
+|---|---|
+| An approved transaction for that order id and amount | It is used as the result. The order completes normally. |
+| A failed or voided transaction | The payment fails, with the decline reason if there is one. |
+| No transaction, after three lookups over a few seconds | The payment fails. Nothing was charged, and the buyer can try again. |
+| A transaction NMI itself marks `unknown`, or one for a different amount | Outcome unknown. See below. |
+
+**This needs the Query API permission on your security key.** Check it under Settings,
+Security Keys in the Merchant Portal. If the lookup is refused, the plugin logs an error
+naming the permission and falls back to sending the request again. That is safe for a
+charge, because the payment token is single-use and a second submission can never produce a
+second charge, but it is less informative: if the re-send is rejected, the most likely
+reason is that the first attempt used the token, which means the first attempt went through.
+That case is reported as an unknown outcome.
+
+**Outcome unknown** means the plugin could not establish whether money moved. It logs a line
+starting `[nmi] OUTCOME UNKNOWN` with the session or transaction id, the buyer is told not
+to try again and to contact you, and no order is created. Search the NMI portal for the
+session id and void the transaction if it is there.
+
+The same rule covers the other operations:
+
+- **Void and capture** are looked up by transaction id. If the transaction is already in the
+  state the call was trying to reach, the call is treated as done; otherwise it is retried,
+  up to three attempts in all.
+- **Refund** is never retried and never guessed at. A refund creates a new transaction, so a
+  second attempt after a lost response could refund twice. The admin sees an "outcome
+  unknown" error and should check the portal before refunding again. The void fallback is
+  skipped in this case too.
+- A request that provably never left the server (DNS failure, connection refused) is simply
+  retried, for every operation.
+
+What is not retried: any definitive answer from NMI, including 430 (duplicate at processor),
+440 and 441 (format errors), which earlier versions retried to no purpose; and a rate limit,
+which NMI reports as `response_code` 301 or HTTP 429 and asks you not to retry immediately.
+
+If your account has duplicate transaction checking switched on in the portal, leave it on.
+It is a second line of defence for the one case the plugin cannot close by itself, a buyer
+who retries by hand after an unknown outcome.
+
+## Finding a payment in the NMI portal
+
+NMI is sent the Medusa payment session id (`payses_...`) as the order id, and again as
+merchant defined field 1. It is not the Medusa order number: the charge happens before the
+order exists. To get from a portal transaction to an order, look up the payment whose
+`payment_session_id` matches, or search the other way with the `transactionid` stored on
+`payment.data`. If you want something readable in the portal, put `order_description` on the
+session data, for example the cart's display id or the buyer's email.
 
 ## Testing against the sandbox
 
@@ -734,6 +904,10 @@ NMI keeps the current test card numbers, test routing and account numbers, and t
 amounts for forcing declines in its
 [developer documentation](https://docs.nmi.com/docs/quick-start-tutorial). Those values
 change occasionally, so read them from NMI rather than copying them out of a blog post.
+
+A live account can also be put into Test Mode in the Merchant Portal. That uses your live
+keys with `sandbox: false`, so it exercises the real hosts and your real key permissions,
+including the Query API one.
 
 For ACH specifically, a sandbox settlement will not arrive on its own schedule the way it
 does in production. Test the settlement path by replaying a
@@ -754,6 +928,12 @@ exercise the return path.
 | Webhook returns 200 but nothing happens | Signature verification failed, which returns `not_supported`. | Confirm `webhookSecret` matches the portal, and that no proxy is rewriting the raw body. |
 | ACH payments stay `authorized` forever | No settlement webhook reaching the route, or the event arriving carries no `order_id` — Medusa ignores any event it cannot tie to a session. | Subscribe to `transaction.check.status.settle` and point it at `/hooks/payment/nmi-ach`. |
 | `authorizePayment` returns `pending` | No `payment_token` on the session. | The storefront never wrote the token back, or wrote it to a different provider's session. |
+| Buyer sees "Bank payments are not available right now" | `webhookSecret` is not set, so ACH is refused. | Set the signing key from Settings, Webhooks. |
+| Log line `The Query API lookup failed` | The security key has no Query API permission, or the Query API was unreachable. | Enable the Query permission on the key. |
+| Log line `[nmi] OUTCOME UNKNOWN` | A response was lost and the transaction could not be confirmed either way. | Search the NMI portal for the id in the log line and void or keep the transaction by hand. |
+| Buyer told "do not try again yet" | Same as above. | Same as above; then tell the buyer whether they were charged. |
+| Admin Cancel fails with "still live at NMI" | The void was rejected and NMI reports the transaction as pending or settled. | If it has settled, refund it instead. |
+| A refund or void made in the NMI portal does not show in Medusa | Card and wallet webhooks are ignored, by design. | Refund or cancel from the Medusa admin. |
 
 ## Not supported yet
 
@@ -774,6 +954,29 @@ Collect.js config. Those two values feed NMI's Apple Pay and Google Pay payment 
 are inert for the card and ACH fields, which pass `paymentType: "cc"` or `"ck"` and never
 build a wallet request. Change them when you copy the files if you sell elsewhere or if you
 surface wallets through Collect.js.
+
+## Upgrading to 0.5
+
+No configuration change is required. What behaves differently:
+
+- **`webhookSecret` is optional.** A card-only store can remove it. Without it ACH is
+  refused and webhooks are ignored.
+- **Card and wallet webhooks are ignored.** If you pointed NMI at `/hooks/payment/nmi-card`
+  or `/hooks/payment/nmi-wallet`, you can delete those webhooks in the portal. The ACH
+  check-status mapping is unchanged. `mapNmiEvent` now returns `null` for the transaction
+  and settlement-batch events.
+- **A failed charge throws a `MedusaError`**, type `payment_authorization_error`, with a
+  message for the buyer. The `NmiError` is on its `cause`. Storefronts that showed a generic
+  failure should show `error.message` from the cart-completion response.
+- **Give the security key the Query API permission.** See
+  [Lost responses and the Query API](#lost-responses-and-the-query-api).
+- **`isRetryableCode` is deprecated** in favour of `isAmbiguousCode`, and no longer matches
+  430, 431, 440 or 441.
+- **The storefront components gained an `onError` prop** and a 15 second tokenization
+  timeout. They are templates you copied, so copy them again or port the change.
+- **`payment.data` now includes `amount` and `session_id`.** Payments authorized before the
+  upgrade do not have them; see the note under
+  [Captures, refunds, and voids](#captures-refunds-and-voids).
 
 ## Local development
 
@@ -802,7 +1005,9 @@ supported by NMI or Network Merchants LLC, and "NMI" is their trademark, used he
 say what the plugin talks to.
 
 The documentation above was written from two sources: this plugin's own source code and
-NMI's public developer documentation. Gateway behavior can differ by merchant account,
+NMI's public developer documentation. NMI's documentation gives only the sandbox address of
+the Query API; the plugin uses `https://secure.nmi.com/api/query.php` for live accounts,
+which answers as a Query API endpoint but is not stated in those pages. Gateway behavior can differ by merchant account,
 processor, and portal configuration, and NMI's documentation is the authority on their
 side of the integration. Where this README and NMI disagree, believe NMI and your own
 sandbox. For support with the gateway itself, contact NMI. For problems with the plugin,

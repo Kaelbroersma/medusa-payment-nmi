@@ -23,6 +23,8 @@ export const NmiCardFields = forwardRef<
   {
     session: Session
     onToken: (data: { payment_token: string; payment_method: "card" }) => void
+    /** Tokenization failed or timed out; re-enable your submit button here. */
+    onError?: (message: string) => void
     /** Optional Collect.js CSS for the inputs inside NMI's iframes. */
     customCss?: Parameters<typeof useCollectJs>[0]["customCss"]
     /** Google Font loaded inside the iframes, e.g. "Inter:400". */
@@ -32,7 +34,7 @@ export const NmiCardFields = forwardRef<
     labelClassName?: string
   }
 >(function NmiCardFields(
-  { session, onToken, customCss, googleFont, className, fieldClassName, labelClassName },
+  { session, onToken, onError, customCss, googleFont, className, fieldClassName, labelClassName },
   ref
 ) {
   const { ready, isValid, error, requestToken } = useCollectJs({
@@ -46,6 +48,7 @@ export const NmiCardFields = forwardRef<
     paymentType: "cc",
     googleFont,
     customCss,
+    onError,
     onToken: (response: CollectJsResponse) =>
       onToken({ payment_token: response.token, payment_method: "card" }),
   })
