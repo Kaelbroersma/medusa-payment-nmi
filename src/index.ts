@@ -55,4 +55,15 @@ export {
 } from "./lib/webhook"
 export type { NmiAction, AchState } from "./lib/webhook"
 export { NmiError, buyerMessageFor } from "./lib/errors"
+/**
+ * The plain-language payment summary the order-details admin widget shows,
+ * for use anywhere else a store wants it.
+ */
+export {
+  isNmiPayment,
+  summarizeNmiPayment,
+  describeAvs,
+  describeCvv,
+} from "./lib/payment-summary"
+export type { NmiPaymentSummary, NmiPaymentState, PaymentLike } from "./lib/payment-summary"
 export type { NmiOptions } from "./types"

@@ -36,10 +36,11 @@ settlement webhook finish the job.
 - [Declines and what the buyer sees](#declines-and-what-the-buyer-sees)
 - [Lost responses and the Query API](#lost-responses-and-the-query-api)
 - [Finding a payment in the NMI portal](#finding-a-payment-in-the-nmi-portal)
+- [The order page widget](#the-order-page-widget)
 - [Testing against the sandbox](#testing-against-the-sandbox)
 - [Troubleshooting](#troubleshooting)
 - [Not supported yet](#not-supported-yet)
-- [Upgrading to 0.5](#upgrading-to-05)
+- [Upgrading to 0.5 and 0.6](#upgrading-to-05-and-06)
 - [Local development](#local-development)
 - [Disclaimer](#disclaimer)
 
@@ -830,7 +831,7 @@ card" that should not be put in front of the person holding the card.
 | Gateway rejection (AVS or CVV rules you set in the portal) | To check the card details and billing address. |
 | Gateway or processor error | A generic "could not process", with no suggestion that the card is at fault. |
 | Rate limited | To wait a minute. |
-| Duplicate transaction rejected by NMI | To contact you before trying again. |
+| Duplicate transaction rejected by NMI | That it looks like a repeat of a payment just made, and to wait a few minutes and try again or contact you. |
 | Outcome unknown | Not to try again, and to contact you. See below. |
 
 The gateway's own response text and code go to the Medusa log with the payment session id.
@@ -892,7 +893,10 @@ which NMI reports as `response_code` 301 or HTTP 429 and asks you not to retry i
 
 If your account has duplicate transaction checking switched on in the portal, leave it on.
 It is a second line of defence for the one case the plugin cannot close by itself, a buyer
-who retries by hand after an unknown outcome.
+who retries by hand after an unknown outcome. NMI matches on card and amount, not on the
+order id, so within the window you set in the portal it also rejects a deliberate second
+order for the same amount. Choose the window with that in mind. The plugin does not send
+`dup_seconds`; the portal setting is what applies.
 
 ## Finding a payment in the NMI portal
 
@@ -902,6 +906,51 @@ order exists. To get from a portal transaction to an order, look up the payment 
 `payment_session_id` matches, or search the other way with the `transactionid` stored on
 `payment.data`. If you want something readable in the portal, put `order_description` on the
 session data, for example the cart's display id or the buyer's email.
+
+## The order page widget
+
+The plugin adds a card titled **NMI payment** to the side column of the order page in the
+Medusa admin. It appears only on orders paid through one of the NMI providers and needs no
+setup: Medusa loads a plugin's admin extensions when the plugin is listed under `plugins` in
+`medusa-config.ts`.
+
+```ts
+module.exports = defineConfig({
+  plugins: [{ resolve: "medusa-payment-nmi", options: {} }],
+  // ...the payment provider registration shown under Quick start
+})
+```
+
+The provider registration under `modules` is what takes payments. The `plugins` entry is
+what loads the widget. If the card does not show, that entry is missing.
+
+For each NMI payment on the order it shows:
+
+- The card brand and last four digits, when the storefront recorded them, and the amount.
+- A status, with one sentence on what the buyer will see on their statement.
+- The NMI transaction id and approval code.
+- The address check (AVS) and security code (CVV) results in plain words, with NMI's code.
+- The latest NMI refund id and the total refunded, after a refund.
+- A note when the charge was confirmed through the Query API after a lost response.
+
+| Status | Meaning |
+|---|---|
+| Charged | The card was charged and nothing has been reversed. |
+| Authorized | Held on the card, not captured yet (`captureMethod: "auth"`). |
+| **Voided** | Reversed before settlement. Nothing will settle. |
+| Partially refunded / Refunded | A settled charge with one or more refund transactions against it. |
+| Awaiting settlement / Settled | ACH: the debit is in flight, or NMI has reported it settled. |
+| Void failed | Cancelled in Medusa, but NMI refused the void. Needs checking in the portal. |
+
+**Voided** is the reason the widget exists. Medusa only offers Refund on a captured payment,
+and this provider turns a full refund made before settlement into a void. Medusa then shows
+the amount as refunded, which is correct for the order totals but reads as though a charge
+and a credit will both appear on the buyer's statement. They will not, and the widget says
+so. A provider cannot relabel Medusa's own refund rows, so those still say "refund".
+
+The widget reads the order the page has already loaded and makes no request of its own. The
+same summary is exported as `summarizeNmiPayment(payment)` for use in emails or your own
+admin pages.
 
 ## Testing against the sandbox
 
@@ -965,9 +1014,14 @@ are inert for the card and ACH fields, which pass `paymentType: "cc"` or `"ck"` 
 build a wallet request. Change them when you copy the files if you sell elsewhere or if you
 surface wallets through Collect.js.
 
-## Upgrading to 0.5
+## Upgrading to 0.5 and 0.6
 
 No configuration change is required. What behaves differently:
+
+- **0.6.0: an NMI payment card on the admin order page.** List the plugin under `plugins`
+  in `medusa-config.ts` to load it. See [The order page widget](#the-order-page-widget).
+- **0.6.0: the duplicate-payment message** now tells the buyer to wait a few minutes and try
+  again, or contact you.
 
 - **0.5.1: a full refund is tried as a void first**, then as a refund if NMI refuses the
   void. 0.5.0 and earlier sent the refund first and only fell back to a void if it was

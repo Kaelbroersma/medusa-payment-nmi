@@ -90,7 +90,9 @@ export function buyerMessageFor(error: unknown, method: "card" | "ach" = "card")
     return "We could not process your payment right now. Please wait a minute and try again."
   }
   if (/duplicate/i.test(error.raw?.responsetext ?? "")) {
-    return "This looks like a repeat of a payment that was just made. Please contact us before trying again."
+    // NMI's duplicate check matches on card and amount inside a window set in the
+    // portal, so it also catches a deliberate second order. Say what will work.
+    return "This looks like a repeat of a payment made a few minutes ago with the same card and amount. If you meant to place another order, please wait a few minutes and try again, or contact us."
   }
   // 300 = "rejected by gateway". That covers the AVS and CVV rules set in the
   // portal, which the buyer can fix, and also things they cannot (a bad API key

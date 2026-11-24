@@ -94,7 +94,11 @@ describe("buyerMessageFor", () => {
 
   it("flags a duplicate rather than inviting another attempt", () => {
     const err = decline("300", "Duplicate transaction REFID:123")
-    expect(buyerMessageFor(err)).toMatch(/contact us/i)
+    const msg = buyerMessageFor(err)
+    expect(msg).toMatch(/contact us/i)
+    // A deliberate second order is legitimate: tell the buyer what will work.
+    expect(msg).toMatch(/wait a few minutes and try again/i)
+    expect(msg).not.toContain("REFID")
   })
 
   it("blames the card details for a gateway reject only when it was an AVS or CVV rule", () => {
