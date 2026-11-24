@@ -938,7 +938,7 @@ For each NMI payment on the order it shows:
 | Charged | The card was charged and nothing has been reversed. |
 | Authorized | Held on the card, not captured yet (`captureMethod: "auth"`). |
 | **Voided** | Reversed before settlement. Nothing will settle. |
-| Partially refunded / Refunded | A settled charge with one or more refund transactions against it. |
+| Partially refunded / Refunded | One or more NMI refund transactions against the charge. The buyer sees the charge and a credit for each. |
 | Awaiting settlement / Settled | ACH: the debit is in flight, or NMI has reported it settled. |
 | Void failed | Cancelled in Medusa, but NMI refused the void. Needs checking in the portal. |
 

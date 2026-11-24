@@ -92,6 +92,9 @@ describe("summarizeNmiPayment", () => {
     expect(s.state).toBe("refunded")
     expect(s.refundId).toBe("12846925394")
     expect(s.detail).toMatch(/separate credit/i)
+    expect(s.detail).toMatch(/as a refund, not a void/i)
+    // payment.data cannot say whether the charge had settled, so the text must not.
+    expect(s.detail).not.toMatch(/settled/i)
   })
 
   it("describes partial refunds and totals them", () => {
@@ -110,6 +113,7 @@ describe("summarizeNmiPayment", () => {
     )
     expect(partial.state).toBe("partially_refunded")
     expect(partial.label).toBe("Partially refunded")
+    expect(partial.detail).not.toMatch(/settled/i)
   })
 
   it("describes an uncaptured authorization", () => {

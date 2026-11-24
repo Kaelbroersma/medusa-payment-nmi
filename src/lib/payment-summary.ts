@@ -191,9 +191,11 @@ export function summarizeNmiPayment(payment: PaymentLike): NmiPaymentSummary {
       state: full ? "refunded" : "partially_refunded",
       label: full ? "Refunded" : "Partially refunded",
       tone: full ? "grey" : "blue",
+      // Whether the charge had settled is not knowable from payment.data, so
+      // say how it was reversed, not when.
       detail: full
-        ? `The ${what} settled and was refunded in full. The buyer sees the charge and a separate credit.`
-        : `Part of the ${what} was refunded. The buyer sees the original charge and a separate credit for each refund.`,
+        ? `Refunded in full through NMI as a refund, not a void. The buyer sees the ${what} and a separate credit.`
+        : `Part of the ${what} was refunded through NMI. The buyer sees the original ${what} and a separate credit for each refund.`,
     }
   }
   if (method === "ach") {
