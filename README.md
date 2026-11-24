@@ -779,18 +779,24 @@ whole amount at NMI. For ACH capture is a no-op, since settlement is what captur
 and pressing it anyway records a misleading capture. See
 [ACH reconciliation](#ach-reconciliation).
 
-**Refund** sends an NMI `refund`. NMI can only refund a settled transaction, which means a
-same-day reversal has to be a void instead. Rather than making you know that, the provider
-retries a rejected full-amount refund as a void, so the Refund button in the admin works
-before the settlement batch runs. The result is marked with `voided: true` on
-`payment.data` so you can tell the two apart afterwards. Partial refunds cannot be voided,
-because a void is all or nothing, so those surface the original NMI error.
+**Refund** of the whole payment, when nothing has been refunded on it before, is sent as a
+**void first**. Before the settlement batch runs a void removes the charge altogether. A
+refund at that point is accepted by NMI too, but it lets both the sale and a credit settle:
+the buyer sees a charge followed by a credit, and you normally pay processing on the sale.
+Medusa's admin only offers Refund once a payment is captured, which in `"sale"` mode is
+always, so the provider makes the choice for you. If NMI refuses the void, which is what it
+does once the transaction has settled, the provider sends an ordinary `refund` for the
+amount. A payment reversed by void is marked `voided: true` on `payment.data` so you can
+tell the two apart afterwards.
 
-Two limits on that fallback. It needs to know the original amount, which the provider
-records on the payment from 0.5.0 onward; a payment authorized by an earlier version has no
-recorded amount, so a same-day refund of one fails with NMI's error and has to be voided in
-the portal. And it never runs when the refund's own outcome is unknown, for the reason given
-under [Lost responses](#lost-responses-and-the-query-api).
+Partial refunds are always sent as a `refund`, because a void is all or nothing. So is any
+refund after the first one on a payment.
+
+Two limits. The provider needs to know the original amount to recognise a full refund, and
+it records that on the payment from 0.5.0 onward; a payment authorized by an earlier version
+is refunded directly, with no void attempt. And if the void's own response is lost, the
+provider does not follow it with a refund unless NMI shows the transaction as settled, for
+the reason given under [Lost responses](#lost-responses-and-the-query-api).
 
 **Cancel** sends a void, which is the correct pre-settlement reversal. If the void fails
 and NMI reports the transaction as already voided, the cancellation succeeds. If NMI reports
@@ -871,8 +877,12 @@ The same rule covers the other operations:
   up to three attempts in all.
 - **Refund** is never retried and never guessed at. A refund creates a new transaction, so a
   second attempt after a lost response could refund twice. The admin sees an "outcome
-  unknown" error and should check the portal before refunding again. The void fallback is
-  skipped in this case too.
+  unknown" error and should check the portal before refunding again.
+- **The void that a full refund tries first** follows the void rule above. If it still cannot
+  be resolved, the provider checks the transaction once more: voided means the refund is
+  done, settled means the void cannot have applied and a refund is sent, and anything else is
+  reported as an unknown outcome with no refund sent. A void that did land followed by a
+  refund would return the money twice.
 - A request that provably never left the server (DNS failure, connection refused) is simply
   retried, for every operation.
 
@@ -958,6 +968,11 @@ surface wallets through Collect.js.
 ## Upgrading to 0.5
 
 No configuration change is required. What behaves differently:
+
+- **0.5.1: a full refund is tried as a void first**, then as a refund if NMI refuses the
+  void. 0.5.0 and earlier sent the refund first and only fell back to a void if it was
+  rejected, but NMI accepts a refund of an unsettled sale, so the void never ran. See
+  [Captures, refunds, and voids](#captures-refunds-and-voids).
 
 - **`webhookSecret` is optional.** A card-only store can remove it. Without it ACH is
   refused and webhooks are ignored.

@@ -401,38 +401,51 @@ describe("nmi (unified)", () => {
   })
 })
 
-describe("refund settlement fallback", () => {
-  it("voids when a full-amount refund is rejected (unsettled transaction)", async () => {
+describe("full refunds try a void first", () => {
+  const FULL = { amount: 100, data: { transactionid: "tx_1", amount: 100 } }
+  const types = (transact: any) => transact.mock.calls.map((c: any) => c[0].type)
+
+  it("voids an unsettled payment and never sends a refund", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    const res = await svc.refundPayment(FULL)
+    expect(types(transact)).toEqual(["void"])
+    expect(res.data.voided).toBe(true)
+    expect(res.data.refundId).toBe("tx_1")
+  })
+
+  it("falls back to a refund when NMI refuses the void (settled transaction)", async () => {
     const { svc } = makeService(NmiCardProviderService)
     const { transact } = failing(svc, (args) => {
-      if (args.type === "refund") {
-        throw new Error("NMI transaction error: Transaction not settled")
+      if (args.type === "void") {
+        throw new NmiError("NMI transaction error: Only unsettled transactions can be voided", "3", "300")
       }
-      return { response: "1", transactionid: "void_1" }
+      return { response: "1", transactionid: "refund_1" }
     })
-    const res = await svc.refundPayment({
-      amount: 100,
-      data: { transactionid: "tx_1", amount: 100 },
-    })
-    expect(transact.mock.calls.map((c: any) => c[0].type)).toEqual(["refund", "void"])
-    expect(res.data.voided).toBe(true)
+    const res = await svc.refundPayment(FULL)
+    expect(types(transact)).toEqual(["void", "refund"])
+    expect(transact.mock.calls[1][0]).toMatchObject({ type: "refund", amount: 100 })
+    expect(res.data.refundId).toBe("refund_1")
+    expect(res.data.voided).toBeUndefined()
   })
 
   it("works end to end on the data a real authorization leaves behind", async () => {
     // Regression: authorize used to drop `amount`, so the provider could never
-    // recognise a full refund and the void fallback never ran outside of tests.
+    // recognise a full refund outside of tests.
     const { svc } = makeService(NmiCardProviderService, { captureMethod: "sale" })
     const authorized = await svc.authorizePayment(AUTH_INPUT)
-    const { transact } = failing(svc, (args) => {
-      if (args.type === "refund") throw new Error("Transaction not settled")
-      return { response: "1", transactionid: "void_1" }
-    })
+    const { transact } = failing(svc, () => ({ response: "1", transactionid: "void_1" }))
     const res = await svc.refundPayment({
       amount: { value: "100", precision: 20 },
       data: authorized.data,
     })
-    expect(transact.mock.calls.map((c: any) => c[0].type)).toEqual(["refund", "void"])
+    expect(types(transact)).toEqual(["void"])
     expect(res.data.voided).toBe(true)
+  })
+
+  it("sends a partial refund as a refund only", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    await svc.refundPayment({ amount: 25, data: { transactionid: "tx_1", amount: 100 } })
+    expect(types(transact)).toEqual(["refund"])
   })
 
   it("does NOT void on a partial refund failure", async () => {
@@ -444,31 +457,94 @@ describe("refund settlement fallback", () => {
     await expect(
       svc.refundPayment({ amount: 25, data: { transactionid: "tx_1", amount: 100 } })
     ).rejects.toThrow("not settled")
-    expect(transact).toHaveBeenCalledTimes(1)
+    expect(types(transact)).toEqual(["refund"])
   })
 
-  it("does NOT void when the refund's outcome is unknown: it may have gone through", async () => {
-    const { svc } = makeService(NmiCardProviderService)
-    const { transact } = failing(svc, (args) => {
-      if (args.type === "refund") {
-        throw new NmiError("NMI refund outcome unknown", "3", undefined, undefined, true)
-      }
-      return { response: "1", transactionid: "void_1" }
+  it("does not void once something has already been refunded on the payment", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    await svc.refundPayment({
+      amount: 100,
+      data: { transactionid: "tx_1", amount: 100, refundId: "refund_0" },
     })
-    await expect(
-      svc.refundPayment({ amount: 100, data: { transactionid: "tx_1", amount: 100 } })
-    ).rejects.toThrow(/outcome unknown/)
-    expect(transact).toHaveBeenCalledTimes(1)
+    expect(types(transact)).toEqual(["refund"])
   })
 
-  it("surfaces the original refund error when the void fails too", async () => {
+  it("refunds directly when the original amount was never recorded (pre-0.5 payments)", async () => {
+    const { svc, transact } = makeService(NmiCardProviderService)
+    await svc.refundPayment({ amount: 100, data: { transactionid: "tx_1" } })
+    expect(types(transact)).toEqual(["refund"])
+  })
+
+  describe("when the void's response is lost", () => {
+    const lostVoid = (svc: any, condition: string | null) =>
+      failing(
+        svc,
+        (args) => {
+          if (args.type === "void") {
+            throw new NmiError("NMI void outcome unknown", "3", undefined, undefined, true)
+          }
+          return { response: "1", transactionid: "refund_1" }
+        },
+        condition
+      )
+
+    it("does NOT fire a refund blindly: a void that landed plus a refund would pay out twice", async () => {
+      for (const condition of [null, "pendingsettlement", "pending", "unknown"]) {
+        const { svc } = makeService(NmiCardProviderService)
+        const { transact } = lostVoid(svc, condition)
+        await expect(svc.refundPayment(FULL)).rejects.toThrow(/outcome unknown/)
+        expect(types(transact)).toEqual(["void"])
+      }
+    })
+
+    it("treats the refund as done when NMI shows the transaction voided", async () => {
+      const { svc } = makeService(NmiCardProviderService)
+      const { transact } = lostVoid(svc, "canceled")
+      const res = await svc.refundPayment(FULL)
+      expect(types(transact)).toEqual(["void"])
+      expect(res.data.voided).toBe(true)
+      expect(res.data.refundId).toBe("tx_1")
+    })
+
+    it("refunds when NMI shows the transaction settled, which a void cannot have changed", async () => {
+      const { svc } = makeService(NmiCardProviderService)
+      const { transact } = lostVoid(svc, "complete")
+      const res = await svc.refundPayment(FULL)
+      expect(types(transact)).toEqual(["void", "refund"])
+      expect(res.data.refundId).toBe("refund_1")
+    })
+  })
+
+  it("surfaces the refund error when both the void and the refund are refused", async () => {
     const { svc } = makeService(NmiCardProviderService)
     failing(svc, (args) => {
       throw new Error(args.type === "refund" ? "refund refused" : "void refused")
     })
-    await expect(
-      svc.refundPayment({ amount: 100, data: { transactionid: "tx_1", amount: 100 } })
-    ).rejects.toThrow("refund refused")
+    await expect(svc.refundPayment(FULL)).rejects.toThrow("refund refused")
+  })
+
+  it("does not follow an unknown refund outcome with anything else", async () => {
+    const { svc } = makeService(NmiCardProviderService)
+    const { transact } = failing(svc, (args) => {
+      if (args.type === "void") throw new Error("already settled")
+      throw new NmiError("NMI refund outcome unknown", "3", undefined, undefined, true)
+    })
+    await expect(svc.refundPayment(FULL)).rejects.toThrow(/outcome unknown/)
+    expect(types(transact)).toEqual(["void", "refund"])
+  })
+
+  it("voids and refunds an ACH payment as a check transaction", async () => {
+    const { svc } = makeService(NmiAchProviderService)
+    const { transact } = failing(svc, (args) => {
+      if (args.type === "void") throw new Error("settled")
+      return { response: "1", transactionid: "refund_1" }
+    })
+    await svc.refundPayment({
+      amount: 100,
+      data: { payment_method: "ach", transactionid: "tx_1", amount: 100 },
+    })
+    expect(transact.mock.calls[0][0]).toMatchObject({ type: "void", ach: {} })
+    expect(transact.mock.calls[1][0]).toMatchObject({ type: "refund", ach: {} })
   })
 
   it.each([0, -1, "x"])("rejects an invalid refund amount (%s) without calling NMI", async (amount) => {

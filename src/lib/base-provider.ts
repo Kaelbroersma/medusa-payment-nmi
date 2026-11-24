@@ -327,34 +327,56 @@ export abstract class NmiBaseProvider extends AbstractPaymentProvider<NmiOptions
     // A void or refund of an ACH transaction must say so, or NMI looks for a card
     // transaction.
     const ach = input.data?.payment_method === "ach" ? { ach: {} } : {}
+
+    // A refund of the whole payment, with nothing refunded before it, is tried
+    // as a void first. Before settlement a void simply removes the charge; a
+    // refund there lets both the sale and a credit settle, so the buyer sees a
+    // charge followed by a credit and the merchant pays processing on the sale.
+    // Medusa's admin only offers Refund once a payment is captured, so this is
+    // the only place the choice can be made. A void is all or nothing, so
+    // partial refunds, and anything after a first refund, stay refunds.
+    //
+    // `amount` is on payment.data from 0.5.0; older payments have none and are
+    // refunded directly.
+    const original = toAmountNumber(input.data?.amount)
+    const isFirstFullRefund =
+      Number.isFinite(original) &&
+      Math.abs(amount - original) < 0.005 &&
+      !input.data?.refundId &&
+      !input.data?.voided
+
+    if (isFirstFullRefund) {
+      try {
+        const txn = await this.client.transact({ type: "void", transactionId, ...ach })
+        return {
+          data: { ...input.data, refundId: txn.transactionid, voided: true, raw: txn },
+        }
+      } catch (voidError) {
+        // A definite refusal (settled, already voided, not voidable) falls
+        // through to the refund. A void whose response was lost is different:
+        // if it did land, a refund on top would return the money twice. The
+        // client has already tried to resolve it through the Query API; look
+        // once more, and only refund when NMI shows the transaction settled,
+        // which is the one state a void can no longer reach.
+        if (voidError instanceof NmiError && voidError.outcomeUnknown) {
+          const condition = await this.client.condition(transactionId)
+          if (condition === "canceled") {
+            return {
+              data: { ...input.data, refundId: transactionId, voided: true },
+            }
+          }
+          if (condition !== "complete") throw this.operationError("refund", voidError)
+        }
+      }
+    }
+
     try {
       const txn = await this.client.transact({
         type: "refund", transactionId, amount, ...ach,
       })
       return { data: { ...input.data, refundId: txn.transactionid, raw: txn } }
     } catch (refundError) {
-      // If the refund's response was lost it may have gone through. Voiding on
-      // top of that could return the money twice, so stop and let a person look.
-      if (refundError instanceof NmiError && refundError.outcomeUnknown) {
-        throw this.operationError("refund", refundError)
-      }
-      // NMI can only refund SETTLED transactions; same-day (and unsettled ACH)
-      // reversals must be voids. For a full-amount refund, fall back to a void
-      // so the admin's Refund button works before the settlement batch runs.
-      // Partial refunds can't void (all-or-nothing), so those surface the
-      // original error.
-      const original = toAmountNumber(input.data?.amount)
-      const isFullRefund =
-        Number.isFinite(original) && Math.abs(amount - original) < 0.005
-      if (!isFullRefund) throw this.operationError("refund", refundError)
-      try {
-        const txn = await this.client.transact({ type: "void", transactionId, ...ach })
-        return {
-          data: { ...input.data, refundId: txn.transactionid, voided: true, raw: txn },
-        }
-      } catch {
-        throw this.operationError("refund", refundError)
-      }
+      throw this.operationError("refund", refundError)
     }
   }
 
